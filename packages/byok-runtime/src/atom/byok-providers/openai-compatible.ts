@@ -1,57 +1,5 @@
 import { parseSse } from "../common/sse";
-
-function normalizeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function isAbortError(err: unknown): boolean {
-  return !!err && typeof err === "object" && (err as any).name === "AbortError";
-}
-
-async function safeFetch(url: string, init: RequestInit, label: string): Promise<Response> {
-  try {
-    return await fetch(url, init);
-  } catch (err) {
-    if (isAbortError(err)) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${label} fetch 失败: ${msg} (url=${url})`);
-  }
-}
-
-function joinBaseUrl(baseUrl: string, endpoint: string): string {
-  const b = normalizeString(baseUrl);
-  const e = normalizeString(endpoint).replace(/^\/+/, "");
-  if (!b || !e) return "";
-  const base = b.endsWith("/") ? b : `${b}/`;
-  return `${base}${e}`;
-}
-
-function buildAuthHeader(token: string): string {
-  const raw = normalizeString(token);
-  if (!raw) return "";
-  if (/^[A-Za-z][A-Za-z0-9+.-]*\s+\S+/.test(raw)) return raw;
-  return `Bearer ${raw}`;
-}
-
-function buildAbortSignal(timeoutMs: number, abortSignal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  if (!abortSignal) return timeout;
-  const anyFn = (AbortSignal as any).any;
-  if (typeof anyFn === "function") return anyFn([timeout, abortSignal]);
-  const ac = new AbortController();
-  const abort = (s: AbortSignal) => {
-    try {
-      ac.abort((s as any).reason);
-    } catch {
-      ac.abort();
-    }
-  };
-  if (timeout.aborted) abort(timeout);
-  else timeout.addEventListener("abort", () => abort(timeout), { once: true });
-  if (abortSignal.aborted) abort(abortSignal);
-  else abortSignal.addEventListener("abort", () => abort(abortSignal), { once: true });
-  return ac.signal;
-}
+import { buildAbortSignal, buildBearerAuthHeader, joinBaseUrl, safeFetch } from "../common/http";
 
 export type OpenAiChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -82,7 +30,7 @@ export async function openAiChatComplete({
 }): Promise<string> {
   const url = joinBaseUrl(baseUrl, "chat/completions");
   if (!url) throw new Error("OpenAI baseUrl 无效");
-  const auth = buildAuthHeader(apiKey);
+  const auth = buildBearerAuthHeader(apiKey);
   if (!auth) throw new Error("OpenAI apiKey 未配置");
 
   const body: any = { model, messages, stream: false };
@@ -131,7 +79,7 @@ export async function openAiChatCompleteWithTools({
 }): Promise<OpenAiChatCompleteWithToolsResult> {
   const url = joinBaseUrl(baseUrl, "chat/completions");
   if (!url) throw new Error("OpenAI baseUrl 无效");
-  const auth = buildAuthHeader(apiKey);
+  const auth = buildBearerAuthHeader(apiKey);
   if (!auth) throw new Error("OpenAI apiKey 未配置");
 
   const body: any = { model, messages, tools, tool_choice: "auto", stream: false };
@@ -181,7 +129,7 @@ export async function* openAiChatStream({
 }): AsyncGenerator<string> {
   const url = joinBaseUrl(baseUrl, "chat/completions");
   if (!url) throw new Error("OpenAI baseUrl 无效");
-  const auth = buildAuthHeader(apiKey);
+  const auth = buildBearerAuthHeader(apiKey);
   if (!auth) throw new Error("OpenAI apiKey 未配置");
 
   const body: any = { model, messages, stream: true };
@@ -234,7 +182,7 @@ export async function openAiListModels({
 }): Promise<string[]> {
   const url = joinBaseUrl(baseUrl, "models");
   if (!url) throw new Error("OpenAI baseUrl 无效");
-  const auth = buildAuthHeader(apiKey);
+  const auth = buildBearerAuthHeader(apiKey);
   if (!auth) throw new Error("OpenAI apiKey 未配置");
 
   const resp = await safeFetch(url, { method: "GET", headers: { authorization: auth }, signal: buildAbortSignal(timeoutMs, abortSignal) }, "OpenAI");

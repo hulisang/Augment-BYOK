@@ -3,6 +3,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { buildBearerAuth } = require("../../atom/common/auth");
 
 function parseArgs(argv) {
   const out = { profile: "", baseUrl: "", token: "", timeoutMs: 4000 };
@@ -42,13 +43,6 @@ function buildUrl(baseUrl, endpointPath) {
   const base = normalizeBaseUrl(baseUrl);
   const ep = normalizePath(endpointPath).replace(/^\/+/, "");
   return base && ep ? `${base}${ep}` : "";
-}
-
-function buildAuth(token) {
-  const raw = typeof token === "string" ? token.trim() : "";
-  if (!raw) return "";
-  if (/^[A-Za-z][A-Za-z0-9+.-]*\s+\S+/.test(raw)) return raw;
-  return `Bearer ${raw}`;
 }
 
 async function postJson({ url, auth, timeoutMs }) {
@@ -104,7 +98,7 @@ async function main() {
   const baseUrl = normalizeBaseUrl(args.baseUrl || profile?.baseUrlDefault || "");
   if (!baseUrl) throw new Error("invalid --base-url (must be service base url, ends with /, without /api/)");
 
-  const auth = buildAuth(args.token);
+  const auth = buildBearerAuth(args.token);
   if (!auth) throw new Error("missing --token");
 
   const allowed = Array.isArray(profile?.allowedPaths) ? profile.allowedPaths : [];

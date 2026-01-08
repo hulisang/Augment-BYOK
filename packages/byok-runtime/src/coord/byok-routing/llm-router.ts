@@ -2,35 +2,14 @@ import { loadByokConfigResolved } from "../../mol/byok-storage/byok-config";
 import { getCachedProviderModels, saveCachedProviderModels } from "../../mol/byok-routing/provider-models-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import type { ByokResolvedConfigV1, ByokResolvedProvider } from "../../types";
+import { buildAbortSignal, buildBearerAuthHeader, joinBaseUrl, normalizeEndpoint, normalizeString } from "../../atom/common/http";
 import { anthropicComplete, anthropicCompleteWithTools, anthropicListModels, anthropicStream, type AnthropicTool } from "../../atom/byok-providers/anthropic-native";
 import { openAiChatComplete, openAiChatCompleteWithTools, openAiChatStream, openAiListModels, type OpenAiTool } from "../../atom/byok-providers/openai-compatible";
-
-function normalizeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function normalizeEndpoint(v: unknown): string {
-  return normalizeString(v).replace(/^\/+/, "");
-}
 
 function asRecord(v: unknown): Record<string, any> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as any) : {};
 }
 
-function joinBaseUrl(baseUrl: string, endpoint: string): string {
-  const b = normalizeString(baseUrl);
-  const e = normalizeString(endpoint).replace(/^\/+/, "");
-  if (!b || !e) return "";
-  const base = b.endsWith("/") ? b : `${b}/`;
-  return `${base}${e}`;
-}
-
-function buildAuthHeader(token: string): string {
-  const raw = normalizeString(token);
-  if (!raw) return "";
-  if (/^[A-Za-z][A-Za-z0-9+.-]*\s+\S+/.test(raw)) return raw;
-  return `Bearer ${raw}`;
-}
 
 function tryParseJsonObject(v: unknown): Record<string, any> | null {
   if (!v) return null;
@@ -69,26 +48,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw err;
 }
 
-function buildAbortSignal(timeoutMs: number, abortSignal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  if (!abortSignal) return timeout;
-  const anyFn = (AbortSignal as any).any;
-  if (typeof anyFn === "function") return anyFn([timeout, abortSignal]);
-  const ac = new AbortController();
-  const abort = (s: AbortSignal) => {
-    try {
-      ac.abort((s as any).reason);
-    } catch {
-      ac.abort();
-    }
-  };
-  if (timeout.aborted) abort(timeout);
-  else timeout.addEventListener("abort", () => abort(timeout), { once: true });
-  if (abortSignal.aborted) abort(abortSignal);
-  else abortSignal.addEventListener("abort", () => abort(abortSignal), { once: true });
-  return ac.signal;
-}
-
 async function fetchAugmentGetModels({
   baseUrl,
   token,
@@ -102,7 +61,7 @@ async function fetchAugmentGetModels({
 }): Promise<any> {
   const url = joinBaseUrl(baseUrl, "get-models");
   if (!url) throw new Error("Augment baseUrl 无效");
-  const auth = buildAuthHeader(token);
+  const auth = buildBearerAuthHeader(token);
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (auth) headers.authorization = auth;

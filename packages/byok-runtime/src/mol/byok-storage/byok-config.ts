@@ -1,14 +1,11 @@
 import { AUGMENT_BYOK } from "../../constants";
+import { normalizeString } from "../../atom/common/http";
 import type { ByokConfigV1, ByokDefaults, ByokExportV1, ByokProvider, ByokProviderSecrets, ByokResolvedConfigV1, ByokResolvedDefaults } from "../../types";
 
 const DEFAULTS: ByokResolvedDefaults = { requestTimeoutMs: 120_000 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-}
-
-function normalizeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
 }
 
 function normalizeProvider(v: unknown): ByokProvider | null {
@@ -60,7 +57,7 @@ function proxySecretKey(field: "token"): string {
   return `${AUGMENT_BYOK.byokSecretPrefix}.proxy.${field}`;
 }
 
-function parseEnvPlaceholder(v: string): { varName: string } | null {
+export function parseEnvPlaceholder(v: string): { varName: string } | null {
   const m = v.match(/^\$\{env:([^}]+)\}$/);
   if (!m) return null;
   const varName = m[1].trim();
@@ -68,7 +65,7 @@ function parseEnvPlaceholder(v: string): { varName: string } | null {
   return { varName };
 }
 
-function resolveSecretOrThrow(raw: string, env: NodeJS.ProcessEnv): string {
+export function resolveSecretOrThrow(raw: string, env: NodeJS.ProcessEnv): string {
   const placeholder = parseEnvPlaceholder(raw);
   if (!placeholder) return raw;
   const value = env[placeholder.varName];

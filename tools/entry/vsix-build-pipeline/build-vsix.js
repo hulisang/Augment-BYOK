@@ -7,6 +7,7 @@ const path = require("path");
 const { patchExtensionEntry } = require("../../mol/vsix-patch-set/patch-extension-entry");
 const { patchApiTokenPreserveCase } = require("../../mol/vsix-patch-set/patch-api-token-preserve-case");
 const { patchApiEndpointStripLeadingSlash } = require("../../mol/vsix-patch-set/patch-api-endpoint-strip-leading-slash");
+const { patchUpstreamConfigOverride } = require("../../mol/vsix-patch-set/patch-upstream-config-override");
 const { patchPromptEnhancerThirdPartyOverride } = require("../../mol/vsix-patch-set/patch-prompt-enhancer-third-party-override");
 const { patchSecretsLocalStore } = require("../../mol/vsix-patch-set/patch-secrets-local-store");
 const { patchLlmEndpointRouter } = require("../../mol/vsix-patch-set/patch-llm-endpoint-router");
@@ -72,6 +73,9 @@ async function main() {
 
   console.log(`[build] patch api endpoint strip leading slash`);
   patchApiEndpointStripLeadingSlash(path.join(extensionDir, "out", "extension.js"));
+
+  console.log(`[build] patch upstream config override`);
+  patchUpstreamConfigOverride(path.join(extensionDir, "out", "extension.js"));
 
   console.log(`[build] patch prompt-enhancer third_party_override`);
   patchPromptEnhancerThirdPartyOverride(path.join(extensionDir, "out", "extension.js"));

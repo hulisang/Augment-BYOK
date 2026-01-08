@@ -1,4 +1,5 @@
 import { AUGMENT_BYOK } from "../../constants";
+import { ensureTrailingSlash, normalizeString } from "../../atom/common/http";
 
 type ProviderModelsCacheEntry = { baseUrl: string; updatedAtMs: number; models: string[] };
 type ProviderModelsCacheV1 = { version: 1; providers: Record<string, ProviderModelsCacheEntry> };
@@ -7,14 +8,8 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-function normalizeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
-}
-
 function normalizeBaseUrlKey(v: unknown): string {
-  const b = normalizeString(v);
-  if (!b) return "";
-  return b.endsWith("/") ? b : `${b}/`;
+  return ensureTrailingSlash(normalizeString(v));
 }
 
 function assertGlobalState(context: any): void {

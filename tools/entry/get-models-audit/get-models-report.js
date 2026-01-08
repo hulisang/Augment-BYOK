@@ -3,6 +3,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { buildBearerAuth } = require("../../atom/common/auth");
 
 function parseArgs(argv) {
   const out = { baseUrl: "", token: "", outJson: "", outMd: "", timeoutMs: 20000 };
@@ -27,13 +28,6 @@ function normalizeBaseUrl(raw) {
   if (!/^https?:\/\//i.test(s)) return "";
   if (!s.endsWith("/")) return "";
   return s;
-}
-
-function buildAuth(token) {
-  const raw = typeof token === "string" ? token.trim() : "";
-  if (!raw) return "";
-  if (/^[A-Za-z][A-Za-z0-9+.-]*\s+\S+/.test(raw)) return raw;
-  return `Bearer ${raw}`;
 }
 
 async function fetchJson({ url, auth, timeoutMs }) {
@@ -81,7 +75,7 @@ async function main() {
   const baseUrl = normalizeBaseUrl(args.baseUrl);
   if (!baseUrl) throw new Error("invalid --base-url (must be service base url, ends with /)");
 
-  const auth = buildAuth(args.token);
+  const auth = buildBearerAuth(args.token);
   if (!auth) throw new Error("missing --token");
 
   const url = `${baseUrl}get-models`;

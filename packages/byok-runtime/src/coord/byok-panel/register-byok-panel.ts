@@ -1,57 +1,15 @@
 import fs from "fs";
 import path from "path";
-import { exportByokConfig, importByokConfig, loadByokConfigRaw, loadByokConfigResolved, saveByokConfig } from "../../mol/byok-storage/byok-config";
+import { exportByokConfig, importByokConfig, loadByokConfigRaw, loadByokConfigResolved, parseEnvPlaceholder, resolveSecretOrThrow, saveByokConfig } from "../../mol/byok-storage/byok-config";
 import { loadProviderModelsCacheRaw, saveCachedProviderModels } from "../../mol/byok-routing/provider-models-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import { anthropicListModels } from "../../atom/byok-providers/anthropic-native";
 import { openAiListModels } from "../../atom/byok-providers/openai-compatible";
+import { assertHttpBaseUrl, buildBearerAuthHeader, joinBaseUrl, normalizeEndpoint, normalizeRawToken, normalizeString } from "../../atom/common/http";
 
 const COMMAND_ID = "vscode-augment.byok.settings";
 const VIEW_TYPE = "augmentByokPanel";
 const TITLE = "Augment BYOK";
-
-function normalizeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function isEnvPlaceholder(v: string): boolean {
-  return /^\$\{env:[^}]+\}$/.test(v);
-}
-
-function parseEnvPlaceholder(v: string): { varName: string } | null {
-  const m = v.match(/^\$\{env:([^}]+)\}$/);
-  if (!m) return null;
-  const varName = m[1].trim();
-  if (!varName) return null;
-  return { varName };
-}
-
-function resolveSecretOrThrow(raw: string, env: NodeJS.ProcessEnv): string {
-  const placeholder = parseEnvPlaceholder(raw);
-  if (!placeholder) return raw;
-  const value = env[placeholder.varName];
-  if (!value) throw new Error(`环境变量缺失：${placeholder.varName}`);
-  return value;
-}
-
-function buildAuthHeader(token: string): string {
-  const raw = normalizeString(token);
-  if (!raw) return "";
-  if (/^[A-Za-z][A-Za-z0-9+.-]*\s+\S+/.test(raw)) return raw;
-  return `Bearer ${raw}`;
-}
-
-function joinBaseUrl(baseUrl: string, endpoint: string): string {
-  const b = normalizeString(baseUrl);
-  const e = normalizeString(endpoint).replace(/^\/+/, "");
-  if (!b || !e) return "";
-  const base = b.endsWith("/") ? b : `${b}/`;
-  return `${base}${e}`;
-}
-
-function normalizeEndpoint(v: unknown): string {
-  return normalizeString(v).replace(/^\/+/, "");
-}
 
 function nonce(): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -99,11 +57,8 @@ async function getLlmEndpoints({ context }: { context: any }): Promise<{ endpoin
 
 async function testProxy({ context }: { context: any }): Promise<{ ok: boolean; status: number }> {
   const cfg = await loadByokConfigResolved({ context });
-  const baseUrl = normalizeString(cfg.proxy.baseUrl);
-  const token = normalizeString(cfg.proxy.token);
-  const url = joinBaseUrl(baseUrl, "get-models");
-  if (!url) throw new Error("Base URL 未配置或无效");
-  const auth = buildAuthHeader(token);
+  const url = joinBaseUrl(assertHttpBaseUrl(cfg.proxy.baseUrl), "get-models");
+  const auth = buildBearerAuthHeader(cfg.proxy.token);
   if (!auth) throw new Error("Token 未配置");
   const resp = await fetch(url, { method: "POST", headers: { "content-type": "application/json", authorization: auth }, body: "{}", signal: AbortSignal.timeout(8000) });
   const ok = resp.status !== 401 && resp.status !== 404;
@@ -215,12 +170,12 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
               const config = await loadByokConfigRaw({ context });
               const modelsCache = await loadProviderModelsCacheRaw({ context });
               const proxyTokenRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.proxy.token`));
-              const tokenStatus = !proxyTokenRaw ? "missing" : isEnvPlaceholder(proxyTokenRaw) ? "env" : "set";
+              const tokenStatus = !proxyTokenRaw ? "missing" : parseEnvPlaceholder(proxyTokenRaw) ? "env" : "set";
               const providersStatus: Record<string, { apiKey: string }> = {};
               const providersModelsCache: Record<string, { updatedAtMs: number; models: string[] }> = {};
               for (const p of config.providers) {
                 const apiKeyRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.provider.${p.id}.apiKey`));
-                providersStatus[p.id] = { apiKey: !apiKeyRaw ? "missing" : isEnvPlaceholder(apiKeyRaw) ? "env" : "set" };
+                providersStatus[p.id] = { apiKey: !apiKeyRaw ? "missing" : parseEnvPlaceholder(apiKeyRaw) ? "env" : "set" };
                 const cached = modelsCache.providers[p.id];
                 if (cached && normalizeString(cached.baseUrl).replace(/\/+$/, "") === normalizeString(p.baseUrl).replace(/\/+$/, "")) {
                   providersModelsCache[p.id] = { updatedAtMs: cached.updatedAtMs, models: cached.models };
@@ -235,6 +190,14 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
               const proxyToken = params && typeof params === "object" ? normalizeString((params as any).proxyToken) : "";
               const clearProxyToken = Boolean(params && typeof params === "object" ? (params as any).clearProxyToken : false);
               const providerSecretsById = params && typeof params === "object" ? (params as any).providerSecretsById : null;
+              const enabled = Boolean(cfg && typeof cfg === "object" ? (cfg as any).enabled : false);
+              if (enabled) {
+                assertHttpBaseUrl(cfg && typeof cfg === "object" ? (cfg as any)?.proxy?.baseUrl : "");
+                const storedRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.proxy.token`));
+                const nextTokenRaw = proxyToken ? proxyToken : clearProxyToken ? "" : storedRaw;
+                const nextToken = nextTokenRaw ? resolveSecretOrThrow(nextTokenRaw, process.env) : "";
+                if (!normalizeRawToken(nextToken)) throw new Error("Token 未配置");
+              }
               await saveByokConfig({
                 context,
                 config: cfg,
