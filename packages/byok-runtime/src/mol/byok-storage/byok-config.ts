@@ -4,6 +4,26 @@ import { asRecord } from "../../atom/common/object";
 import { assertVscodeContextStorage } from "../../atom/common/vscode-storage";
 import type { ByokConfigV2, ByokExportV2, ByokProvider, ByokProviderSecrets, ByokResolvedConfigV2, ByokRoutingRule } from "../../types";
 
+function normalizeStringArray(v: unknown): string[] | undefined {
+  const arr = Array.isArray(v) ? v : null;
+  if (!arr) return undefined;
+  const out = arr.map(normalizeString).filter(Boolean);
+  return out.length ? out : undefined;
+}
+
+function normalizeStringRecord(v: unknown): Record<string, string> | undefined {
+  const r = asRecord(v);
+  if (!r) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, vv] of Object.entries(r)) {
+    const key = normalizeString(k);
+    const val = normalizeString(vv);
+    if (!key || !val) continue;
+    out[key] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function normalizeProvider(v: unknown): ByokProvider | null {
   const r = asRecord(v);
   if (!r) return null;
@@ -11,9 +31,14 @@ function normalizeProvider(v: unknown): ByokProvider | null {
   const type = normalizeString(r.type);
   const baseUrl = normalizeString(r.baseUrl);
   const defaultModel = normalizeString(r.defaultModel) || undefined;
-  if (!id || !baseUrl) return null;
-  if (type !== "openai_compatible" && type !== "anthropic_native") return null;
-  return { id, type, baseUrl, defaultModel };
+  const command = normalizeString(r.command) || undefined;
+  const args = normalizeStringArray(r.args);
+  const headers = normalizeStringRecord(r.headers);
+  const requestDefaults = (asRecord(r.requestDefaults) as any) || undefined;
+  if (!id) return null;
+  if (type !== "openai_compatible" && type !== "openai_native" && type !== "anthropic_native" && type !== "gemini_cli") return null;
+  if (type !== "gemini_cli" && !baseUrl) return null;
+  return { id, type, baseUrl, defaultModel, command, args, headers, requestDefaults };
 }
 
 function normalizeRoutingRule(v: unknown): ByokRoutingRule | null {

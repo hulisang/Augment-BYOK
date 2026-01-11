@@ -4,8 +4,11 @@ import { AUGMENT_BYOK } from "../../constants";
 import type { ByokResolvedConfigV2, ByokResolvedProvider, ByokRoutingRule } from "../../types";
 import { buildAbortSignal, buildBearerAuthHeader, joinBaseUrl, normalizeEndpoint, normalizeString } from "../../atom/common/http";
 import { asRecord } from "../../atom/common/object";
-import { anthropicComplete, anthropicCompleteWithTools, anthropicStream, type AnthropicTool } from "../../atom/byok-providers/anthropic-native";
-import { openAiChatComplete, openAiChatCompleteWithTools, openAiChatStream, type OpenAiTool } from "../../atom/byok-providers/openai-compatible";
+import { anthropicComplete, anthropicStreamEvents, type AnthropicTool } from "../../atom/byok-providers/anthropic-native";
+import { codexChatStreamEventsWithTools, codexResponsesCompleteText, codexResponsesStreamEvents } from "../../atom/byok-providers/codex-native";
+import { geminiCliCompleteText, geminiCliStreamEvents } from "../../atom/byok-providers/gemini-cli";
+import type { ByokStreamEvent } from "../../atom/byok-providers/stream-events";
+import { openAiChatComplete, openAiChatStreamEvents, type OpenAiTool } from "../../atom/byok-providers/openai-compatible";
 
 const BYOK_REQUEST_TIMEOUT_MS = 120_000;
 const BYOK_MODELS_TIMEOUT_MS = 12_000;
@@ -446,6 +449,10 @@ function toolUseNode({ id, toolUseId, toolName, inputJson }: { id: number; toolU
   return { id, type: 5, tool_use: { tool_use_id: toolUseId, tool_name: toolName, input_json: inputJson } };
 }
 
+function thinkingNode({ id, summary }: { id: number; summary: string }): any {
+  return { id, type: 8, thinking: { summary } };
+}
+
 async function completeText({
   provider,
   model,
@@ -467,12 +474,14 @@ async function completeText({
 }): Promise<string> {
   const m = normalizeString(model) || normalizeString(provider.defaultModel);
   if (!m) throw new Error(`Provider(${provider.id}) 缺少 model（defaultModel 未配置且请求未指定 model）`);
-  const baseUrl = normalizeString(provider.baseUrl);
-  if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
   const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
-  if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+  const extraHeaders = provider.headers;
+  const extraBody = provider.requestDefaults;
 
   if (provider.type === "openai_compatible") {
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
     return await openAiChatComplete({
       baseUrl,
       apiKey,
@@ -480,12 +489,25 @@ async function completeText({
       messages: system ? [{ role: "system", content: system }, { role: "user", content: user }] : [{ role: "user", content: user }],
       temperature,
       maxTokens,
+      extraHeaders,
+      extraBody,
       timeoutMs,
       abortSignal
     });
   }
 
+  if (provider.type === "openai_native") {
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+    const prompt = system ? `${system}\n\n${user}` : user;
+    return await codexResponsesCompleteText({ baseUrl, apiKey, model: m, prompt, extraHeaders, extraBody, timeoutMs, abortSignal });
+  }
+
   if (provider.type === "anthropic_native") {
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
     const mt = typeof maxTokens === "number" && maxTokens > 0 ? maxTokens : 1024;
     return await anthropicComplete({
       baseUrl,
@@ -495,9 +517,18 @@ async function completeText({
       messages: [{ role: "user", content: user }],
       temperature,
       maxTokens: mt,
+      extraHeaders,
+      extraBody,
       timeoutMs,
       abortSignal
     });
+  }
+
+  if (provider.type === "gemini_cli") {
+    const command = normalizeString(provider.command);
+    if (!command) throw new Error(`Provider(${provider.id}) gemini_cli command 未配置`);
+    const prompt = system ? `${system}\n\n${user}` : user;
+    return await geminiCliCompleteText({ command, args: provider.args, model: m, prompt, apiKey: apiKey || undefined, timeoutMs, abortSignal });
   }
 
   throw new Error(`未知 Provider type: ${String((provider as any).type)}`);
@@ -521,31 +552,47 @@ async function* streamText({
   maxTokens?: number;
   timeoutMs: number;
   abortSignal?: AbortSignal;
-}): AsyncGenerator<string> {
+}): AsyncGenerator<ByokStreamEvent> {
   const m = normalizeString(model) || normalizeString(provider.defaultModel);
   if (!m) throw new Error(`Provider(${provider.id}) 缺少 model（defaultModel 未配置且请求未指定 model）`);
-  const baseUrl = normalizeString(provider.baseUrl);
-  if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
   const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
-  if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+  const extraHeaders = provider.headers;
+  const extraBody = provider.requestDefaults;
 
   if (provider.type === "openai_compatible") {
-    yield* openAiChatStream({
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+    yield* openAiChatStreamEvents({
       baseUrl,
       apiKey,
       model: m,
       messages: system ? [{ role: "system", content: system }, { role: "user", content: user }] : [{ role: "user", content: user }],
       temperature,
       maxTokens,
+      extraHeaders,
+      extraBody,
       timeoutMs,
       abortSignal
     });
     return;
   }
 
+  if (provider.type === "openai_native") {
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+    const prompt = system ? `${system}\n\n${user}` : user;
+    yield* codexResponsesStreamEvents({ baseUrl, apiKey, model: m, prompt, extraHeaders, extraBody, timeoutMs, abortSignal });
+    return;
+  }
+
   if (provider.type === "anthropic_native") {
+    const baseUrl = normalizeString(provider.baseUrl);
+    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
     const mt = typeof maxTokens === "number" && maxTokens > 0 ? maxTokens : 1024;
-    yield* anthropicStream({
+    yield* anthropicStreamEvents({
       baseUrl,
       apiKey,
       model: m,
@@ -553,9 +600,19 @@ async function* streamText({
       messages: [{ role: "user", content: user }],
       temperature,
       maxTokens: mt,
+      extraHeaders,
+      extraBody,
       timeoutMs,
       abortSignal
     });
+    return;
+  }
+
+  if (provider.type === "gemini_cli") {
+    const command = normalizeString(provider.command);
+    if (!command) throw new Error(`Provider(${provider.id}) gemini_cli command 未配置`);
+    const prompt = system ? `${system}\n\n${user}` : user;
+    yield* geminiCliStreamEvents({ command, args: provider.args, model: m, prompt, apiKey: apiKey || undefined, timeoutMs, abortSignal });
     return;
   }
 
@@ -854,9 +911,18 @@ export async function maybeHandleCallApiStream({
     const toolDefs = getToolDefinitions(request);
     if (!toolDefs.length) {
       async function* gen() {
+        let nodeId = 1;
         for await (const chunk of streamText({ provider: resolvedProvider, model: resolvedModel, system, user, timeoutMs: tmo, abortSignal })) {
           throwIfAborted(abortSignal);
-          yield transform({ text: chunk, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+          if (chunk.kind === "text") {
+            yield transform({ text: chunk.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+            continue;
+          }
+          if (chunk.kind === "thinking") {
+            yield transform({ text: "", unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [thinkingNode({ id: nodeId++, summary: chunk.summary })] });
+            continue;
+          }
+          throw new Error("chat-stream 未提供 tool_definitions 但收到了 tool_use");
         }
       }
       return gen();
@@ -866,10 +932,6 @@ export async function maybeHandleCallApiStream({
     const requestNodes = getRequestNodes(request);
 
     const provider = resolvedProvider;
-    const baseUrl = normalizeString(provider.baseUrl);
-    if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
-    const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
-    if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
     const model = resolvedModel;
     if (!model) throw new Error(`Provider(${provider.id}) 缺少 model`);
 
@@ -877,34 +939,80 @@ export async function maybeHandleCallApiStream({
       let nodeId = 1;
 
       if (provider.type === "openai_compatible") {
+        const baseUrl = normalizeString(provider.baseUrl);
+        if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+        const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
+        if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
         const tools = toOpenAiTools(toolDefs);
         const messages = buildOpenAiMessagesForToolCalling({ system, chatHistory, currentUserText: user, currentRequestNodes: requestNodes });
         throwIfAborted(abortSignal);
-        const res = await openAiChatCompleteWithTools({ baseUrl, apiKey, model, messages, tools, timeoutMs: tmo, abortSignal });
-        if (res.kind === "tool_calls") {
-          if (res.assistantText) yield transform({ text: res.assistantText, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
-          for (const tc of res.toolCalls) {
-            throwIfAborted(abortSignal);
-            const toolName = normalizeString(tc?.function?.name);
-            const toolUseId = normalizeString(tc?.id) || `byok-tool-${Date.now()}-${nodeId}`;
-            const argsRaw = tc?.function?.arguments;
-            const inputJson = typeof argsRaw === "string" ? argsRaw : argsRaw && typeof argsRaw === "object" ? JSON.stringify(argsRaw) : "{}";
-            try {
-              JSON.parse(inputJson || "{}");
-            } catch {
-              throw new Error(`Tool(${toolName}) arguments 不是合法 JSON: ${inputJson.slice(0, 200)}`);
-            }
-            yield transform({
-              text: "",
-              unknown_blob_names: [],
-              checkpoint_not_found: false,
-              workspace_file_chunks: [],
-              nodes: [toolUseNode({ id: nodeId++, toolUseId, toolName, inputJson })]
-            });
+        for await (const ev of openAiChatStreamEvents({
+          baseUrl,
+          apiKey,
+          model,
+          messages,
+          tools,
+          extraHeaders: provider.headers,
+          extraBody: provider.requestDefaults,
+          timeoutMs: tmo,
+          abortSignal
+        })) {
+          throwIfAborted(abortSignal);
+          if (ev.kind === "text") {
+            yield transform({ text: ev.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+            continue;
           }
-          return;
+          if (ev.kind === "thinking") {
+            yield transform({ text: "", unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [thinkingNode({ id: nodeId++, summary: ev.summary })] });
+            continue;
+          }
+          yield transform({
+            text: "",
+            unknown_blob_names: [],
+            checkpoint_not_found: false,
+            workspace_file_chunks: [],
+            nodes: [toolUseNode({ id: nodeId++, toolUseId: ev.toolUseId, toolName: ev.toolName, inputJson: ev.inputJson })]
+          });
         }
-        yield transform({ text: res.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+        return;
+      }
+
+      if (provider.type === "openai_native") {
+        const baseUrl = normalizeString(provider.baseUrl);
+        if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+        const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
+        if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+        const tools = toOpenAiTools(toolDefs);
+        const messages = buildOpenAiMessagesForToolCalling({ system, chatHistory, currentUserText: user, currentRequestNodes: requestNodes });
+        throwIfAborted(abortSignal);
+        for await (const ev of codexChatStreamEventsWithTools({
+          baseUrl,
+          apiKey,
+          model,
+          messages,
+          tools,
+          extraHeaders: provider.headers,
+          extraBody: provider.requestDefaults,
+          timeoutMs: tmo,
+          abortSignal
+        })) {
+          throwIfAborted(abortSignal);
+          if (ev.kind === "text") {
+            yield transform({ text: ev.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+            continue;
+          }
+          if (ev.kind === "thinking") {
+            yield transform({ text: "", unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [thinkingNode({ id: nodeId++, summary: ev.summary })] });
+            continue;
+          }
+          yield transform({
+            text: "",
+            unknown_blob_names: [],
+            checkpoint_not_found: false,
+            workspace_file_chunks: [],
+            nodes: [toolUseNode({ id: nodeId++, toolUseId: ev.toolUseId, toolName: ev.toolName, inputJson: ev.inputJson })]
+          });
+        }
         return;
       }
 
@@ -913,28 +1021,44 @@ export async function maybeHandleCallApiStream({
         const maxTokens = 1024;
         const messages = buildAnthropicMessagesForToolCalling({ chatHistory, currentUserText: user, currentRequestNodes: requestNodes });
         throwIfAborted(abortSignal);
-        const res = await anthropicCompleteWithTools({ baseUrl, apiKey, model, system: system || undefined, messages, tools, maxTokens, timeoutMs: tmo, abortSignal });
-        if (res.kind === "tool_calls") {
-          if (res.assistantText) yield transform({ text: res.assistantText, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
-          for (const tu of res.toolUses) {
-            throwIfAborted(abortSignal);
-            const toolName = normalizeString(tu.name);
-            const toolUseId = normalizeString(tu.id) || `byok-tool-${Date.now()}-${nodeId}`;
-            const inputJson = JSON.stringify(tu.input ?? {});
-            yield transform({
-              text: "",
-              unknown_blob_names: [],
-              checkpoint_not_found: false,
-              workspace_file_chunks: [],
-              nodes: [toolUseNode({ id: nodeId++, toolUseId, toolName, inputJson })]
-            });
+        const baseUrl = normalizeString(provider.baseUrl);
+        if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
+        const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
+        if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
+        for await (const ev of anthropicStreamEvents({
+          baseUrl,
+          apiKey,
+          model,
+          system: system || undefined,
+          messages,
+          tools,
+          maxTokens,
+          extraHeaders: provider.headers,
+          extraBody: provider.requestDefaults,
+          timeoutMs: tmo,
+          abortSignal
+        })) {
+          throwIfAborted(abortSignal);
+          if (ev.kind === "text") {
+            yield transform({ text: ev.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
+            continue;
           }
-          return;
+          if (ev.kind === "thinking") {
+            yield transform({ text: "", unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [thinkingNode({ id: nodeId++, summary: ev.summary })] });
+            continue;
+          }
+          yield transform({
+            text: "",
+            unknown_blob_names: [],
+            checkpoint_not_found: false,
+            workspace_file_chunks: [],
+            nodes: [toolUseNode({ id: nodeId++, toolUseId: ev.toolUseId, toolName: ev.toolName, inputJson: ev.inputJson })]
+          });
         }
-        yield transform({ text: res.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] });
         return;
       }
 
+      if (provider.type === "gemini_cli") throw new Error("gemini_cli 不支持 tool_definitions/chat-stream tools");
       throw new Error(`未知 Provider type: ${String((provider as any).type)}`);
     }
     return genTools();
@@ -948,12 +1072,16 @@ export async function maybeHandleCallApiStream({
     ep === "generate-conversation-title"
   ) {
     async function* gen() {
+      let nodeId = 1;
       for await (const chunk of streamText({ provider: resolvedProvider, model: resolvedModel, system, user, timeoutMs: tmo, abortSignal })) {
         throwIfAborted(abortSignal);
-        const raw =
-          ep === "instruction-stream" || ep === "smart-paste-stream"
-            ? { text: chunk }
-            : { text: chunk, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] };
+        if (chunk.kind === "thinking") {
+          if (ep === "instruction-stream" || ep === "smart-paste-stream") continue;
+          yield transform({ text: "", unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [thinkingNode({ id: nodeId++, summary: chunk.summary })] });
+          continue;
+        }
+        if (chunk.kind === "tool_use") throw new Error(`${ep} 不支持 tool_use`);
+        const raw = ep === "instruction-stream" || ep === "smart-paste-stream" ? { text: chunk.text } : { text: chunk.text, unknown_blob_names: [], checkpoint_not_found: false, workspace_file_chunks: [], nodes: [] };
         yield transform(raw);
       }
     }

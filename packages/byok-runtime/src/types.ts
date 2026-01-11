@@ -4,13 +4,17 @@ export type InstallArgs = {
   setActivate: (next: unknown) => void;
 };
 
-export type ByokProviderType = "openai_compatible" | "anthropic_native";
+export type ByokProviderType = "openai_compatible" | "openai_native" | "anthropic_native" | "gemini_cli";
 
 export type ByokProvider = {
   id: string;
   type: ByokProviderType;
   baseUrl: string;
   defaultModel?: string;
+  command?: string;
+  args?: string[];
+  headers?: Record<string, string>;
+  requestDefaults?: Record<string, any>;
 };
 
 export type ByokRoutingRule = {

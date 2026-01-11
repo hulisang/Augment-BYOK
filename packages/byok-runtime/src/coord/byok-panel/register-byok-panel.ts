@@ -5,6 +5,8 @@ import { exportByokConfig, getByokProxyTokenRaw, getByokSecretStatus, importByok
 import { loadProviderModelsCacheRaw, saveCachedProviderModels } from "../../mol/byok-storage/byok-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import { anthropicListModels } from "../../atom/byok-providers/anthropic-native";
+import { codexListModels } from "../../atom/byok-providers/codex-native";
+import { geminiListModelsApiKey } from "../../atom/byok-providers/gemini-api-key";
 import { openAiListModels } from "../../atom/byok-providers/openai-compatible";
 import { assertHttpBaseUrl, buildBearerAuthHeader, ensureTrailingSlash, joinBaseUrl, normalizeEndpoint, normalizeRawToken, normalizeString } from "../../atom/common/http";
 
@@ -83,7 +85,20 @@ async function listModels({
   if (!pid) throw new Error("缺少 providerId");
   const saved = cfg.providers.find((x) => x.id === pid) || null;
   const ptype = normalizeString(saved?.type) || normalizeString(providerType);
-  if (ptype !== "openai_compatible" && ptype !== "anthropic_native") throw new Error(saved ? `Provider(${pid}) type 无效` : `未知 Provider: ${pid}（请先保存或传入 providerType）`);
+  if (ptype !== "openai_compatible" && ptype !== "openai_native" && ptype !== "anthropic_native" && ptype !== "gemini_cli")
+    throw new Error(saved ? `Provider(${pid}) type 无效` : `未知 Provider: ${pid}（请先保存或传入 providerType）`);
+  if (ptype === "gemini_cli") {
+    const b = normalizeString(baseUrl) || normalizeString(saved?.baseUrl);
+    if (!b) throw new Error(`Provider(${pid}) 缺少 baseUrl`);
+    assertHttpBaseUrl(b);
+    const rawKey = normalizeString(apiKey) || normalizeString(saved?.secrets.apiKey || saved?.secrets.token || "");
+    const key = rawKey ? resolveSecretOrThrow(rawKey, env) : "";
+    if (!key) throw new Error(`Provider(${pid}) 缺少 apiKey/token`);
+    const timeoutMs = 12_000;
+    const models = await geminiListModelsApiKey({ baseUrl: b, apiKey: key, timeoutMs });
+    await saveCachedProviderModels({ context, providerId: pid, baseUrl: b, models });
+    return { models };
+  }
   const b = normalizeString(baseUrl) || normalizeString(saved?.baseUrl);
   if (!b) throw new Error(`Provider(${pid}) 缺少 baseUrl`);
   assertHttpBaseUrl(b);
@@ -94,6 +109,11 @@ async function listModels({
 
   if (ptype === "openai_compatible") {
     const models = await openAiListModels({ baseUrl: b, apiKey: key, timeoutMs });
+    await saveCachedProviderModels({ context, providerId: pid, baseUrl: b, models });
+    return { models };
+  }
+  if (ptype === "openai_native") {
+    const models = await codexListModels({ baseUrl: b, apiKey: key, timeoutMs });
     await saveCachedProviderModels({ context, providerId: pid, baseUrl: b, models });
     return { models };
   }
@@ -196,10 +216,15 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
                   const pid = normalizeString(p && typeof p === "object" ? (p as any).id : "");
                   const ptype = normalizeString(p && typeof p === "object" ? (p as any).type : "");
                   const pbaseUrl = normalizeString(p && typeof p === "object" ? (p as any).baseUrl : "");
+                  const pcommand = normalizeString(p && typeof p === "object" ? (p as any).command : "");
                   const pdefaultModel = normalizeString(p && typeof p === "object" ? (p as any).defaultModel : "");
                   if (!pid) throw new Error("启用 BYOK 需要有效的 Provider.id");
-                  if (ptype !== "openai_compatible" && ptype !== "anthropic_native") throw new Error(`Provider(${pid}) type 无效`);
-                  assertHttpBaseUrl(pbaseUrl);
+                  if (ptype !== "openai_compatible" && ptype !== "openai_native" && ptype !== "anthropic_native" && ptype !== "gemini_cli") throw new Error(`Provider(${pid}) type 无效`);
+                  if (ptype === "gemini_cli") {
+                    if (!pcommand) throw new Error(`Provider(${pid}) gemini_cli command 未配置`);
+                  } else {
+                    assertHttpBaseUrl(pbaseUrl);
+                  }
                   if (!pdefaultModel) throw new Error(`Provider(${pid}) 缺少 defaultModel`);
                 }
                 assertHttpBaseUrl(cfg && typeof cfg === "object" ? (cfg as any)?.proxy?.baseUrl : "");

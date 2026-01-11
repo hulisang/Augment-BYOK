@@ -395,7 +395,7 @@
         <div class="form-grid">
           <div class="form-group">
             <label class="form-label" for="input-augment-base-url">Base URL (服务基地址)</label>
-            <input type="url" id="input-augment-base-url" placeholder="例如：https://tenant.augmentcode.com/" />
+            <input type="url" id="input-augment-base-url" placeholder="例如：https://tenant.augmentcode.com（尾随 / 可省略）" />
             <div id="text-effective-url" class="text-muted text-mono text-xs" style="white-space: pre-wrap;"></div>
           </div>
           <div class="form-group">
@@ -435,6 +435,8 @@
               <select id="select-new-provider-kind">
                 <option value="openaiCompatible">OpenAI Compatible (通用)</option>
                 <option value="anthropic">Anthropic (Claude)</option>
+                <option value="codex">OpenAI (Codex)</option>
+                <option value="geminiCli">Gemini CLI</option>
               </select>
             </div>
             <div class="form-group form-grid--full flex-end">

@@ -99,6 +99,7 @@
     for (const p of providers) {
       const pid = String(p.id || "");
       const kind = String(p.type || "");
+      const isCli = kind === "gemini_cli";
       const sec = (state.secretStatus?.providers && state.secretStatus.providers[pid]) || {};
 
       const card = document.createElement("div");
@@ -170,15 +171,50 @@
 
       const g1 = document.createElement("div");
       g1.className = "form-group";
-      g1.innerHTML = "<label class='form-label'>Base URL (服务基地址)</label>";
+      g1.innerHTML = "<label class='form-label'>Base URL (API 前缀，需包含版本段；尾随 / 可省略)</label>";
       const inputBase = document.createElement("input");
       inputBase.type = "url";
       inputBase.value = normalizeString(p.baseUrl);
-      inputBase.placeholder = kind === "anthropic_native" ? "例如: https://api.anthropic.com/" : "例如: https://api.openai.com/v1/";
+      inputBase.placeholder =
+        kind === "anthropic_native"
+          ? "例如: https://api.anthropic.com/v1"
+          : isCli
+            ? "例如: https://generativelanguage.googleapis.com/v1（用于 models list，可留空）"
+            : kind === "openai_native"
+              ? "例如: https://api.openai.com/codex/v1"
+              : "例如: https://api.openai.com/v1";
       inputBase.addEventListener("input", () => {
         p.baseUrl = normalizeString(inputBase.value);
       });
       g1.appendChild(inputBase);
+
+      const gCmd = document.createElement("div");
+      gCmd.className = "form-group";
+      gCmd.innerHTML = "<label class='form-label'>Command (gemini_cli)</label>";
+      const inputCmd = document.createElement("input");
+      inputCmd.type = "text";
+      inputCmd.value = normalizeString(p.command);
+      inputCmd.placeholder = "例如: gemini";
+      inputCmd.addEventListener("input", () => {
+        p.command = normalizeString(inputCmd.value);
+      });
+      gCmd.appendChild(inputCmd);
+
+      const gArgs = document.createElement("div");
+      gArgs.className = "form-group form-grid--full";
+      gArgs.innerHTML = "<label class='form-label'>Args（每行一个，支持 {{model}}/{{prompt}}）</label>";
+      const inputArgs = document.createElement("textarea");
+      inputArgs.rows = 3;
+      inputArgs.value = Array.isArray(p.args) ? p.args.map((x) => normalizeString(x)).filter(Boolean).join("\n") : "";
+      inputArgs.placeholder = "--model\n{{model}}\n--prompt\n{{prompt}}";
+      inputArgs.addEventListener("input", () => {
+        const args = inputArgs.value
+          .split("\n")
+          .map((x) => normalizeString(x))
+          .filter(Boolean);
+        p.args = args.length ? args : undefined;
+      });
+      gArgs.appendChild(inputArgs);
 
       const g2 = document.createElement("div");
       g2.className = "form-group";
@@ -191,10 +227,21 @@
       const cachedModels = Array.isArray(state.modelsCacheByProviderId?.[pid]?.models) ? state.modelsCacheByProviderId[pid].models.map((x) => normalizeString(x)).filter(Boolean) : [];
       for (const m of cachedModels) selectModel.appendChild(new Option(m, m));
       const currentModel = normalizeString(p.defaultModel);
+      const inputModel = document.createElement("input");
+      inputModel.type = "text";
+      inputModel.value = currentModel;
+      inputModel.placeholder = isCli ? "例如: gemini-1.5-pro" : "例如: gpt-4o-mini";
+      inputModel.addEventListener("input", () => {
+        const v = normalizeString(inputModel.value);
+        p.defaultModel = v || undefined;
+        if (selectModel.value !== v) selectModel.value = v;
+      });
       if (currentModel && !cachedModels.includes(currentModel)) selectModel.appendChild(new Option(currentModel, currentModel));
       selectModel.value = currentModel;
       selectModel.addEventListener("change", () => {
-        p.defaultModel = normalizeString(selectModel.value) || undefined;
+        const v = normalizeString(selectModel.value);
+        p.defaultModel = v || undefined;
+        inputModel.value = v;
       });
       const btnRefreshModels = document.createElement("button");
       btnRefreshModels.type = "button";
@@ -207,6 +254,7 @@
       modelRow.appendChild(btnRefreshModels);
       g2.appendChild(modelRow);
       g2.appendChild(textModelsStatus);
+      g2.appendChild(inputModel);
       const textModelHint = document.createElement("div");
       textModelHint.className = "text-muted text-xs";
       textModelHint.textContent = "提示：chat/chat-stream 由主面板 Model Picker 专属控制；其它 endpoint 未指定 model 时才会用 defaultModel 兜底。";
@@ -238,6 +286,7 @@
           if (current && !models.includes(current)) selectModel.appendChild(new Option(current + "（当前/不在列表）", current));
           for (const m of models) selectModel.appendChild(new Option(m, m));
           if (current) selectModel.value = current;
+          inputModel.value = current;
           textModelsStatus.textContent = `models: ${models.length}`;
           if (!models.length) toast("models 为空：请检查 baseUrl / apiKey / provider 兼容性");
         } catch (e) {
@@ -247,6 +296,10 @@
       });
 
       grid.appendChild(g1);
+      if (isCli) {
+        grid.appendChild(gCmd);
+        grid.appendChild(gArgs);
+      }
       grid.appendChild(g2);
       grid.appendChild(g3);
 
@@ -599,8 +652,8 @@
     if (!id) return toast("Provider ID 不能为空");
     const providers = Array.isArray(state.config?.providers) ? state.config.providers : [];
     if (providers.some((p) => String(p.id || "") === id)) return toast("Provider ID 已存在");
-    const type = kind === "anthropic" ? "anthropic_native" : "openai_compatible";
-    providers.push({ id, type, baseUrl: "", defaultModel: "" });
+    const type = kind === "anthropic" ? "anthropic_native" : kind === "codex" ? "openai_native" : kind === "geminiCli" ? "gemini_cli" : "openai_compatible";
+    providers.push(type === "gemini_cli" ? { id, type, baseUrl: "", defaultModel: "", command: "gemini", args: ["--model", "{{model}}", "--prompt", "{{prompt}}"] } : { id, type, baseUrl: "", defaultModel: "" });
     state.config.providers = providers;
     el("input-new-provider-id").value = "";
     el("region-add-provider").classList.add("hidden");
