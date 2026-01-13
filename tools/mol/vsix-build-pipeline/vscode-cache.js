@@ -80,6 +80,13 @@ function normalizeFsPathForCompareWithRealpath(p) {
   return normalizeFsPathForCompare(realPathIfPossible(base));
 }
 
+function isWithinOrEqualFsPath(child, parent) {
+  const c = normalizeFsPathForCompareWithRealpath(child);
+  const p = normalizeFsPathForCompareWithRealpath(parent);
+  if (c === p) return true;
+  return c.startsWith(p.endsWith(path.sep) ? p : p + path.sep);
+}
+
 function fileUriVariants(fsPath) {
   const abs = path.resolve(fsPath);
   const withSep = abs.endsWith(path.sep) ? abs : abs + path.sep;
@@ -156,6 +163,7 @@ async function cleanVscodeWorkspaceStorage({ repoRoot, args }) {
   const candidates = dirents.filter((d) => d.isDirectory()).map((d) => path.join(workspaceStorageDir, d.name));
 
   const matches = [];
+  const pointers = [];
   await mapLimit(candidates, args.concurrency, async (dir) => {
     const wsJsonPath = path.join(dir, "workspace.json");
     let text = "";
@@ -168,6 +176,7 @@ async function cleanVscodeWorkspaceStorage({ repoRoot, args }) {
     if (!json) return;
     const pointer = typeof json.folder === "string" ? json.folder : typeof json.workspace === "string" ? json.workspace : "";
     if (!pointer) return;
+    if (pointers.length < 2048) pointers.push(pointer);
     if (targetUriSet.has(pointer)) return matches.push(dir);
     const p = pointerToFsPath(pointer);
     if (!p) return;
@@ -179,6 +188,13 @@ async function cleanVscodeWorkspaceStorage({ repoRoot, args }) {
   if (matches.length === 0) {
     console.log(`[vscode-cache] no match for workspace: ${workspaceResolved}`);
     console.log(`[vscode-cache] searched: ${workspaceStorageDir}`);
+    const suggestions = Array.from(new Set(pointers.map(pointerToFsPath).filter(Boolean).map((p) => path.resolve(p)).filter((p) => isWithinOrEqualFsPath(p, workspaceResolved)))).slice(0, 8);
+    if (suggestions.length > 0) {
+      console.log(`[vscode-cache] hint: 发现同一路径前缀下的候选 workspace（你可能在 VS Code 打开的是子目录/工作区文件，请用 --workspace 指定）：`);
+      for (const s of suggestions) console.log(`[vscode-cache] hint:   --workspace ${s}`);
+    } else {
+      console.log(`[vscode-cache] hint: 你可能没有用 VS Code 打开过该路径，或使用了不同的 --channel/--user-dir；可检查 workspaceStorage/*/workspace.json 的 folder|workspace 字段。`);
+    }
     return;
   }
 
