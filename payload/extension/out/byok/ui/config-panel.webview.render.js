@@ -215,7 +215,6 @@
     const lines = [];
     lines.push(`<div class="title">Runtime</div>`);
     lines.push(`<div class="small">runtimeEnabled: <span class="mono">${escapeHtml(String(Boolean(s.runtimeEnabled)))}</span></div>`);
-    lines.push(`<div class="small">byokEnabled: <span class="mono">${escapeHtml(String(Boolean(s.byokEnabled)))}</span></div>`);
     if (s.storageKey) lines.push(`<div class="small">storageKey: <span class="mono">${escapeHtml(String(s.storageKey))}</span></div>`);
 
     lines.push(`<div style="height:10px"></div>`);
@@ -246,7 +245,6 @@
     const s = summary && typeof summary === "object" ? summary : {};
     const off = c.official && typeof c.official === "object" ? c.official : {};
     const routing = c.routing && typeof c.routing === "object" ? c.routing : {};
-    const timeouts = c.timeouts && typeof c.timeouts === "object" ? c.timeouts : {};
     const endpointSearchText = normalizeStr(endpointSearch);
 
     const providers = Array.isArray(c.providers) ? c.providers : [];
@@ -275,8 +273,19 @@
       const globals = stReport.global && typeof stReport.global === "object" ? stReport.global : {};
       const gTests = Array.isArray(globals.tests) ? globals.tests : [];
       const gFailed = gTests.filter((x) => x && x.ok === false).length;
+      const toolExec = globals.toolExec && typeof globals.toolExec === "object" ? globals.toolExec : null;
+      const toolExecBadge =
+        toolExec && toolExec.ok === true ? `<span class="badge">ok</span>` : toolExec && toolExec.ok === false ? `<span class="badge">failed</span>` : "";
+      const failedTools = toolExec && Array.isArray(toolExec.failedTools) ? toolExec.failedTools : [];
+      const failedToolsText = failedTools.length ? `${failedTools.join(",")}${toolExec && toolExec.failedToolsTruncated ? ",…" : ""}` : "";
       const badge = stReport.ok === true ? `<span class="badge">ok</span>` : `<span class="badge">failed</span>`;
-      return `<div class="small">result: ${badge} providers_failed=${failed}/${total} global_failed=${gFailed}/${gTests.length}</div>`;
+      return (
+        `<div class="small">result: ${badge} providers_failed=${failed}/${total} global_failed=${gFailed}/${gTests.length}</div>` +
+        (toolExec
+          ? `<div class="small">toolsExec: ${toolExecBadge} ${escapeHtml(String(toolExec.detail || ""))}</div>`
+          : "") +
+        (failedToolsText ? `<div class="small mono">failed_tools: ${escapeHtml(failedToolsText)}</div>` : "")
+      );
     };
 
     const selfTestHtml = `
@@ -317,29 +326,18 @@
     const general = `
       <div class="card">
         <div class="title">General</div>
+        <div class="hint">
+          常用：设置默认 BYOK provider（用于未显式指定 provider 的 byok 路由，以及 <span class="mono">/get-models</span> 注入的默认模型偏好）。总开关请用顶部按钮。
+        </div>
         <div class="grid">
-          <div>enabled</div>
-          <div class="row">
-            <input type="checkbox" id="enabled" ${c.enabled === true ? "checked" : ""} />
-            <span class="small">BYOK runtime switch (routes still apply)</span>
-          </div>
-          <div>routing.default_mode</div>
-          <div>
-            <select id="defaultMode">
-              ${optionHtml({ value: "official", label: "official", selected: routing.defaultMode === "official" })}
-              ${optionHtml({ value: "byok", label: "byok", selected: routing.defaultMode === "byok" })}
-              ${optionHtml({ value: "disabled", label: "disabled", selected: routing.defaultMode === "disabled" })}
-            </select>
-          </div>
           <div>routing.default_provider_id</div>
           <div>
             <select id="defaultProviderId">
               ${optionHtml({ value: "", label: "(auto)", selected: !routing.defaultProviderId })}
               ${providerIds.map((id) => optionHtml({ value: id, label: id, selected: routing.defaultProviderId === id })).join("")}
             </select>
+            <div class="small">留空：自动选择（通常为 providers[0]）。</div>
           </div>
-          <div>timeouts.upstream_ms</div>
-          <div><input type="number" id="upstreamMs" min="1000" step="1000" value="${escapeHtml(String(timeouts.upstreamMs ?? 120000))}" /></div>
         </div>
       </div>
     `;
@@ -512,8 +510,8 @@
         : []
     );
 
-    const defaultMode = normalizeStr(routing.defaultMode) || "official";
-    const defaultModeLabel = `default (${defaultMode})`;
+    const defaultMode = "official";
+    const defaultModeLabel = "default (official)";
 
     const endpointGroupsHtml = endpointGroups
       .map((g) => {
@@ -603,7 +601,7 @@
 	          这里统一管理 endpoint 的 <span class="mono">Routing</span> + <span class="mono">Disable</span>。
 	          <span class="mono">disabled</span> 表示本地 no-op（不发网络请求），用于屏蔽遥测/排查调用链。
 	          当前清单包含 <span class="mono">${escapeHtml(String(knownEndpoints.length))}</span> 个已知 endpoint；只有当 Augment 实际调用到该 endpoint 时规则才会生效。
-	          未显式设置则使用 <span class="mono">routing.default_mode</span>（当前：<span class="mono">${escapeHtml(defaultMode)}</span>）。
+	          未显式设置则默认 <span class="mono">official</span>。
 	          <br/>
 	          说明：当前仅 <span class="mono">LLM 数据面（13）</span> 支持 <span class="mono">byok</span>；其它端点默认只能 <span class="mono">official/disabled</span>。
 	        </div>

@@ -9,6 +9,8 @@ const { runSelfTest } = require("../core/self-test");
 const { fetchProviderModels } = require("../providers/models");
 const { renderConfigPanelHtml } = require("./config-panel.html");
 
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 120000;
+
 function summarizeRuntime({ cfgMgr, state }) {
   const cfg = cfgMgr?.get?.() || defaultConfig();
   const off = cfg?.official && typeof cfg.official === "object" ? cfg.official : {};
@@ -22,7 +24,6 @@ function summarizeRuntime({ cfgMgr, state }) {
 
   return {
     runtimeEnabled: Boolean(state?.runtimeEnabled),
-    byokEnabled: cfg?.enabled === true,
     storageKey: typeof cfgMgr?.getStorageKey === "function" ? cfgMgr.getStorageKey() : "",
     official: {
       completionUrl: normalizeString(off.completionUrl),
@@ -142,7 +143,7 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
         return;
       }
       const cfg = msg && typeof msg === "object" && msg.config && typeof msg.config === "object" ? msg.config : cfgMgr.get();
-      const timeoutMs = Number.isFinite(Number(cfg?.timeouts?.upstreamMs)) && Number(cfg.timeouts.upstreamMs) > 0 ? Number(cfg.timeouts.upstreamMs) : 120000;
+      const timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS;
 
       selfTestRunning = true;
       selfTestController = new AbortController();

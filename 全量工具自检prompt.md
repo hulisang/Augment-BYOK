@@ -50,6 +50,8 @@
 
 若某工具在当前会话根本不存在，则该工具行标记 `SKIPPED (tool not present)`。
 
+> 现实差异提示：在很多 Augment 环境里，`web-search` 属于 **remoteToolHost**（走远程 `/agents/*` 或 `/relay/agents/*` 路由），而 `web-fetch` / `open-browser` 往往属于 **sidecarToolHost**（本地 sidecar 执行）。因此“`web-search` 404 但 `open-browser` 能打开网页”是**正常且可解释**的：一个是远程工具路由缺失，一个是本地打开浏览器。
+
 ---
 
 ## C. 初始化（必须先做）
@@ -119,7 +121,8 @@
 
 ### 8) Web 工具组
 1) `web-search`：查询 `example.com robots.txt`。  
-   - 若返回 404/route not found：标记 FAIL，并备注“remote tool host /agents/* 路由缺失或 completion_url/代理未实现”。  
+   - 若返回 404/route not found：标记 FAIL，并备注“remoteToolHost 的 /agents/*（或 /relay/agents/*）路由缺失/未部署；需要把 completion_url 指向真实 Augment tenant，或在你的代理实现 `agents/run-remote-tool` / `check-tool-safety` 等路由”。  
+   - 说明：`web-search` **不会**本地打开浏览器；“打开网页”请用 `open-browser`。  
 2) `web-fetch`：抓取 `https://example.com`，记录标题/正文片段。  
 3) `open-browser`：打开 `https://example.com`（仅 1 次）。
 
@@ -133,6 +136,9 @@
    - `add_tasks`：新增任务（标题包含 `BYOK Manual Self Test Task`）。  
    - `update_tasks`：把任务置为 `IN_PROGRESS` 再置为 `COMPLETE`。  
    - `reorganize_tasklist`：做一次最小重排（把该行移动到最前）。  
+     - **关键格式要求（避免 `level 1 has no parent`）**：提交给 `reorganize_tasklist.markdown` 的内容建议只包含“任务行”，不要包含 `# Current Task List` 这类标题/说明行。  
+     - 第一条任务行必须是 **root(level=0)**：形如 `[ ] UUID:... NAME:...`（**不能**以 `-` 开头）。  
+     - 其余子任务用 `-`/`--`/`---` 表示层级（允许 `-[ ]` 或 `- [ ]`）；不要出现 `--` 但前面从未出现 `-` 的“层级跳跃”。  
 3) 若 `view_tasklist` 失败且提示无 root：后三项标记 **SKIPPED**，备注“需要在对话中先初始化任务列表（UI 打开 Task List / 创建任意任务后重跑）”。
 
 ### 11) `remember`

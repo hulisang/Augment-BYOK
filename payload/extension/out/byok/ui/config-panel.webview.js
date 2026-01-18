@@ -189,9 +189,10 @@
   }
 
   function gatherConfigFromDom() {
-    const cfg = JSON.parse(JSON.stringify(uiState.cfg || {}));
-
-    cfg.enabled = Boolean(qs("#enabled")?.checked);
+    const base = uiState.cfg && typeof uiState.cfg === "object" ? uiState.cfg : {};
+    const cfg = JSON.parse(JSON.stringify(base));
+    try { delete cfg.enabled; } catch { }
+    try { delete cfg.timeouts; } catch { }
 
     cfg.historySummary = cfg.historySummary && typeof cfg.historySummary === "object" ? cfg.historySummary : {};
     cfg.historySummary.enabled = Boolean(qs("#historySummaryEnabled")?.checked);
@@ -204,12 +205,9 @@
       cfg.historySummary.model = parsedHsModel.modelId;
     }
 
-    cfg.timeouts = cfg.timeouts && typeof cfg.timeouts === "object" ? cfg.timeouts : {};
-    cfg.timeouts.upstreamMs = Number(qs("#upstreamMs")?.value || 0) || 120000;
-
     cfg.routing = cfg.routing && typeof cfg.routing === "object" ? cfg.routing : {};
-    cfg.routing.defaultMode = normalizeStr(qs("#defaultMode")?.value) || "official";
     cfg.routing.defaultProviderId = normalizeStr(qs("#defaultProviderId")?.value);
+    try { delete cfg.routing.defaultMode; } catch { }
 
     cfg.official = cfg.official && typeof cfg.official === "object" ? cfg.official : {};
     cfg.official.completionUrl = normalizeStr(qs("#officialCompletionUrl")?.value);
@@ -266,7 +264,7 @@
   function setUiState(patch, { preserveEdits = true } = {}) {
     if (preserveEdits) {
       try {
-        if (qs("#enabled")) uiState.cfg = gatherConfigFromDom();
+        if (qs("#defaultProviderId")) uiState.cfg = gatherConfigFromDom();
       } catch { }
     }
     uiState = { ...uiState, ...(patch || {}) };
@@ -483,6 +481,9 @@
     }
 
     if (el.matches("[data-p-key=\"type\"],[data-p-key=\"defaultModel\"]")) return setUiState({ status: "Provider updated (pending save).", dirty: true }, { preserveEdits: true });
+
+    if (el.matches("#defaultProviderId")) return markDirty("Default provider updated (pending save).");
+    if (el.matches("#historySummaryEnabled,#historySummaryByokModel")) return markDirty("History summary updated (pending save).");
   });
 
   document.addEventListener("input", (ev) => {

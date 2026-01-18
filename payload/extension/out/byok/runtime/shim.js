@@ -6,6 +6,12 @@ const { debug, warn } = require("../infra/log");
 const { ensureConfigManager, state, captureAugmentToolDefinitions } = require("../config/state");
 const { decideRoute } = require("../core/router");
 const { normalizeEndpoint, normalizeString, normalizeRawToken, safeTransform, emptyAsyncGenerator } = require("../infra/util");
+const { normalizeBlobsMap, coerceBlobText } = require("../core/blob-utils");
+const { extractDiagnosticsList, pickDiagnosticPath, pickDiagnosticStartLine, pickDiagnosticEndLine } = require("../core/diagnostics-utils");
+const { pickPath, pickNumResults, pickBlobNameHint } = require("../core/next-edit-fields");
+const { bestMatchIndex, bestInsertionIndex } = require("../core/text-match");
+const { parseNextEditLocCandidatesFromText, mergeNextEditLocCandidates } = require("../core/next-edit-loc-utils");
+const { buildNextEditStreamRuntimeContext } = require("../core/next-edit-stream-utils");
 const { ensureModelRegistryFeatureFlags } = require("../core/model-registry");
 const { openAiCompleteText, openAiStreamTextDeltas, openAiChatStreamChunks } = require("../providers/openai");
 const { openAiResponsesCompleteText, openAiResponsesStreamTextDeltas, openAiResponsesChatStreamChunks } = require("../providers/openai-responses");
@@ -47,6 +53,8 @@ const OFFICIAL_CODEBASE_RETRIEVAL_TIMEOUT_MS = 12000;
 const OFFICIAL_CONTEXT_CANVAS_TIMEOUT_MS = 4000;
 const CONTEXT_CANVAS_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTEXT_CANVAS_CACHE = new Map();
+const WORKSPACE_BLOB_MAX_CHARS = 2_000_000;
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 120000;
 
 async function maybeDeleteHistorySummaryCacheForEndpoint(ep, body) {
   const endpoint = normalizeEndpoint(ep);
@@ -161,73 +169,6 @@ function clampLineNumber(n) {
   return Math.floor(v);
 }
 
-function commonPrefixLen(a, b) {
-  const s1 = typeof a === "string" ? a : "";
-  const s2 = typeof b === "string" ? b : "";
-  const n = Math.min(s1.length, s2.length);
-  let i = 0;
-  for (; i < n; i++) if (s1.charCodeAt(i) !== s2.charCodeAt(i)) break;
-  return i;
-}
-
-function commonSuffixLen(a, b) {
-  const s1 = typeof a === "string" ? a : "";
-  const s2 = typeof b === "string" ? b : "";
-  const n = Math.min(s1.length, s2.length);
-  let i = 0;
-  for (; i < n; i++) if (s1.charCodeAt(s1.length - 1 - i) !== s2.charCodeAt(s2.length - 1 - i)) break;
-  return i;
-}
-
-function bestMatchIndex(haystack, needle, { prefixHint, suffixHint, maxCandidates = 200 } = {}) {
-  const h = typeof haystack === "string" ? haystack : "";
-  const n = typeof needle === "string" ? needle : "";
-  if (!h || !n) return -1;
-  const pre = typeof prefixHint === "string" ? prefixHint : "";
-  const suf = typeof suffixHint === "string" ? suffixHint : "";
-  let bestIdx = -1;
-  let bestScore = -1;
-  let i = 0;
-  for (let pos = h.indexOf(n); pos !== -1; pos = h.indexOf(n, pos + 1)) {
-    i += 1;
-    if (i > maxCandidates) break;
-    const before = pre ? h.slice(Math.max(0, pos - pre.length), pos) : "";
-    const after = suf ? h.slice(pos + n.length, pos + n.length + suf.length) : "";
-    const score = commonSuffixLen(before, pre) * 2 + commonPrefixLen(after, suf);
-    if (score > bestScore || (score === bestScore && pos > bestIdx)) { bestScore = score; bestIdx = pos; }
-  }
-  return bestIdx;
-}
-
-function bestInsertionIndex(haystack, { prefixHint, suffixHint, maxCandidates = 200 } = {}) {
-  const h = typeof haystack === "string" ? haystack : "";
-  const pre = typeof prefixHint === "string" ? prefixHint : "";
-  const suf = typeof suffixHint === "string" ? suffixHint : "";
-  if (!h) return 0;
-  if (!pre && !suf) return 0;
-
-  if (pre) {
-    let bestIdx = -1;
-    let bestScore = -1;
-    let i = 0;
-    for (let pos = h.indexOf(pre); pos !== -1; pos = h.indexOf(pre, pos + 1)) {
-      i += 1;
-      if (i > maxCandidates) break;
-      const ins = pos + pre.length;
-      const after = suf ? h.slice(ins, ins + suf.length) : "";
-      const score = pre.length * 2 + commonPrefixLen(after, suf);
-      if (score > bestScore || (score === bestScore && ins > bestIdx)) { bestScore = score; bestIdx = ins; }
-    }
-    if (bestIdx >= 0) return bestIdx;
-  }
-
-  if (suf) {
-    const pos = h.indexOf(suf);
-    if (pos >= 0) return pos;
-  }
-  return 0;
-}
-
 function trimTrailingNewlines(s) {
   const t = normalizeNewlines(s);
   return t.replace(/\n+$/g, "");
@@ -278,6 +219,23 @@ async function readWorkspaceFileTextByPath(p) {
   return "";
 }
 
+async function maybeAugmentBodyWithWorkspaceBlob(body, { pathHint, blobKey } = {}) {
+  const b = body && typeof body === "object" ? body : {};
+  const blobs = normalizeBlobsMap(b.blobs);
+
+  const hint = normalizeString(pathHint);
+  const path = hint || pickPath(b);
+  if (!path) return b;
+
+  const key = normalizeString(blobKey) || path;
+  if (blobs && coerceBlobText(blobs[key])) return b;
+
+  const txt = await readWorkspaceFileTextByPath(path);
+  if (!txt) return b;
+  if (txt.length > WORKSPACE_BLOB_MAX_CHARS) return b;
+  return { ...b, blobs: { ...(blobs || {}), [key]: txt } };
+}
+
 async function buildInstructionReplacementMeta(body) {
   const b = body && typeof body === "object" ? body : {};
   const selectedTextRaw = resolveTextField(b, ["selected_text", "selectedText"]);
@@ -317,25 +275,47 @@ async function buildInstructionReplacementMeta(body) {
 
 function pickNextEditLocationCandidates(body) {
   const b = body && typeof body === "object" ? body : {};
-  const max =
-    Number.isFinite(Number(b.num_results)) && Number(b.num_results) > 0 ? Math.min(6, Math.floor(Number(b.num_results))) : 1;
+  const max = pickNumResults(b, { defaultValue: 1, max: 6 });
 
   const out = [];
-  const diags = Array.isArray(b.diagnostics) ? b.diagnostics : [];
+  const seen = new Set();
+  const push = ({ path, start, stop, score = 1, source }) => {
+    const p = normalizeString(path);
+    const a = normalizeLineNumber(start);
+    const z = normalizeLineNumber(stop);
+    if (!p || a === null || z === null) return false;
+    const key = `${p}:${a}:${Math.max(a, z)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    out.push({ item: { path: p, range: { start: a, stop: Math.max(a, z) } }, score, debug_info: { source: normalizeString(source) || "unknown" } });
+    return true;
+  };
+
+  const diags = extractDiagnosticsList(b.diagnostics);
   for (const d of diags) {
-    const path = normalizeString(d?.path || d?.file_path || d?.filePath || d?.item?.path);
+    const path = pickDiagnosticPath(d);
     if (!path) continue;
-    const r = d?.range || d?.item?.range || d?.location?.range;
-    const start = normalizeLineNumber(r?.start?.line ?? r?.start_line ?? r?.startLine ?? r?.start);
+    const start = pickDiagnosticStartLine(d);
     if (start === null) continue;
-    const stop = normalizeLineNumber(r?.end?.line ?? r?.stop?.line ?? r?.end_line ?? r?.stopLine ?? r?.stop ?? start) ?? start;
-    out.push({ item: { path, range: { start, stop: Math.max(start, stop) } }, score: 1, debug_info: { source: "diagnostic" } });
+    const stop = pickDiagnosticEndLine(d, start);
+    push({ path, start, stop, score: 1, source: "diagnostic" });
     if (out.length >= max) break;
   }
 
-  if (!out.length) {
-    const path = normalizeString(b.path);
-    if (path) out.push({ item: { path, range: { start: 0, stop: 0 } }, score: 1, debug_info: { source: "fallback" } });
+  if (out.length < max) {
+    const path = pickPath(b);
+    if (path) push({ path, start: 0, stop: 0, score: 1, source: "fallback:path" });
+  }
+
+  if (out.length < max) {
+    // 某些请求不带 path，但会带 blobs（key 往往是 path/blobName）。
+    const blobs = normalizeBlobsMap(b.blobs);
+    if (blobs) {
+      for (const k of Object.keys(blobs)) {
+        push({ path: k, start: 0, stop: 0, score: 1, source: "fallback:blobs" });
+        if (out.length >= max) break;
+      }
+    }
   }
 
   return out;
@@ -1038,7 +1018,7 @@ async function maybeHandleCallApi({ endpoint, body, transform, timeoutMs, abortS
   }
   if (route.mode !== "byok") return undefined;
 
-  const t = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : cfg.timeouts.upstreamMs;
+  const t = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_UPSTREAM_TIMEOUT_MS;
 
   if (ep === "/get-models") {
     const byokModels = buildByokModelsFromConfig(cfg);
@@ -1121,8 +1101,29 @@ async function maybeHandleCallApi({ endpoint, body, transform, timeoutMs, abortS
   }
 
   if (ep === "/next_edit_loc") {
-    const candidate_locations = pickNextEditLocationCandidates(body);
-    return safeTransform(transform, makeBackNextEditLocationResult(candidate_locations), ep);
+    const b = body && typeof body === "object" ? body : {};
+    const max = pickNumResults(b, { defaultValue: 1, max: 6 });
+
+    const baseline = pickNextEditLocationCandidates(body);
+    const fallbackPath =
+      pickPath(b) ||
+      normalizeString(baseline?.[0]?.item?.path);
+    let llmCandidates = [];
+
+    try {
+      const bodyForPrompt = await maybeAugmentBodyWithWorkspaceBlob(body, { pathHint: fallbackPath });
+      const { system, messages } = buildMessagesForEndpoint(ep, bodyForPrompt);
+      const text = await byokCompleteText({ provider: route.provider, model: route.model, system, messages, timeoutMs: t, abortSignal });
+      llmCandidates = parseNextEditLocCandidatesFromText(text, { fallbackPath, max, source: "byok:llm" });
+    } catch (err) {
+      warn(`next_edit_loc llm fallback to diagnostics: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (!llmCandidates.length) {
+      return safeTransform(transform, makeBackNextEditLocationResult(baseline), ep);
+    }
+    const merged = mergeNextEditLocCandidates({ baseline, llmCandidates, max });
+    return safeTransform(transform, makeBackNextEditLocationResult(merged), ep);
   }
 
   return undefined;
@@ -1142,7 +1143,7 @@ async function maybeHandleCallApiStream({ endpoint, body, transform, timeoutMs, 
   if (route.mode === "disabled") return emptyAsyncGenerator();
   if (route.mode !== "byok") return undefined;
 
-  const t = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : cfg.timeouts.upstreamMs;
+  const t = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_UPSTREAM_TIMEOUT_MS;
 
   if (isTelemetryDisabled(cfg, ep)) return emptyAsyncGenerator();
 
@@ -1199,16 +1200,19 @@ async function maybeHandleCallApiStream({ endpoint, body, transform, timeoutMs, 
 
   if (ep === "/next-edit-stream") {
     const b = body && typeof body === "object" ? body : {};
-    const selectionBegin = Number.isFinite(Number(b.selection_begin_char)) ? Number(b.selection_begin_char) : 0;
-    const selectionEnd = Number.isFinite(Number(b.selection_end_char)) ? Number(b.selection_end_char) : selectionBegin;
-    const existingCode = typeof b.selected_text === "string" ? b.selected_text : "";
-
-    const { system, messages } = buildMessagesForEndpoint(ep, body);
+    const hasPrefix = typeof b.prefix === "string";
+    const hasSuffix = typeof b.suffix === "string";
+    const bodyForContext =
+      hasPrefix && hasSuffix
+        ? b
+        : await maybeAugmentBodyWithWorkspaceBlob(body, { pathHint: pickPath(body), blobKey: pickBlobNameHint(body) });
+    const { promptBody, path, blobName, selectionBegin, selectionEnd, existingCode } = buildNextEditStreamRuntimeContext(bodyForContext);
+    const { system, messages } = buildMessagesForEndpoint(ep, promptBody);
     const suggestedCode = await byokCompleteText({ provider: route.provider, model: route.model, system, messages, timeoutMs: t, abortSignal });
 
     const raw = makeBackNextEditGenerationChunk({
-      path: normalizeString(b.path),
-      blobName: normalizeString(b.blob_name),
+      path: path || blobName,
+      blobName,
       charStart: selectionBegin,
       charEnd: selectionEnd,
       existingCode,

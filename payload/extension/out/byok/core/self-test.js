@@ -1024,6 +1024,29 @@ async function selfTestProvider({ cfg, provider, timeoutMs, abortSignal, log, ca
     record({ name: "nextEdit", ok: false, ms: nextEditRes.ms, detail: nextEditRes.ok ? "empty output" : nextEditRes.error });
   }
 
+  // /next_edit_loc prompt builder smoke test（走非流式 completeText）
+  const nextEditLocRes = await withTimed(async () => {
+    const body = {
+      instruction: "Find the most relevant place to apply the next edit.",
+      path: "selftest.js",
+      num_results: 2,
+      diagnostics: [
+        {
+          path: "selftest.js",
+          range: { start: { line: 0 }, end: { line: 0 } },
+          message: "dummy diagnostic for smoke test"
+        }
+      ]
+    };
+    const { system, messages } = buildMessagesForEndpoint("/next_edit_loc", body);
+    return await completeTextByProvider({ provider, model, system, messages, timeoutMs, abortSignal });
+  });
+  if (nextEditLocRes.ok && normalizeString(nextEditLocRes.res)) {
+    record({ name: "nextEditLoc", ok: true, ms: nextEditLocRes.ms, detail: `len=${String(nextEditLocRes.res).length}` });
+  } else {
+    record({ name: "nextEditLoc", ok: false, ms: nextEditLocRes.ms, detail: nextEditLocRes.ok ? "empty output" : nextEditLocRes.error });
+  }
+
   // chat-stream（基础）
   const chatReq = makeBaseAugmentChatRequest({
     message: "Self-test: reply with OK-chat (no markdown).",
@@ -2040,33 +2063,82 @@ async function selfTestToolsModelExec({ toolDefinitions, timeoutMs, abortSignal,
     }
     if (rt2Def && taskMarkdown) {
       // 最小“重排”：把 BYOK Self Test Task 移到 root task 的第一个子任务位置（避免插到 header 前导致 “level 1 has no parent”）
-      const lines = taskMarkdown.split(/\r?\n/);
+      const normalizeMarkdownForReorg = (md) => {
+        const raw = normalizeString(md);
+        if (!raw) return "";
 
-      const parseTaskLevel = (line) => {
-        const s = typeof line === "string" ? line : "";
-        const m = s.match(/^(\s*)(-*)\s*\[[ x\/-]\]\s*UUID:/);
-        if (!m) return null;
-        const dashes = m[2] || "";
-        return dashes.length; // 0=root, 1='-', 2='--', ...
+        const lines = raw.split(/\r?\n/);
+        const tasks = [];
+
+        const parseTaskLine = (line) => {
+          const s = typeof line === "string" ? line : "";
+          const m = s.match(/^(\s*)(-*)\s*(\[[ x\/-]\]\s*UUID:.*)$/);
+          if (!m) return null;
+          const dashes = m[2] || "";
+          const body = (m[3] || "").trimEnd();
+          if (!body) return null;
+          return { dashCount: dashes.length, body };
+        };
+
+        for (const l of lines) {
+          const t = parseTaskLine(l);
+          if (t) tasks.push(t);
+        }
+        if (!tasks.length) return raw;
+
+        // view_tasklist 输出可能包含 header/空行；reorganize_tasklist 的 parser 对“根任务必须是 level=0”非常敏感。
+        // 这里把 markdown 归一化为“仅 task 行”，并保证第一行是 root(level 0)。
+        const pickRootIdx = () => {
+          const preferred = tasks.findIndex(
+            (t) => t.body.includes("NAME:Current Task List") || t.body.includes("Root task for conversation") || t.body.includes("Root task")
+          );
+          if (preferred >= 0) return preferred;
+          let best = 0;
+          let bestDash = Number.POSITIVE_INFINITY;
+          for (let i = 0; i < tasks.length; i++) {
+            const d = Number(tasks[i].dashCount) || 0;
+            if (d < bestDash) {
+              bestDash = d;
+              best = i;
+            }
+          }
+          return best;
+        };
+
+        const rootIdx = pickRootIdx();
+        const baseDash = Math.max(0, Math.floor(Number(tasks[rootIdx]?.dashCount) || 0));
+
+        const normalized = tasks.map((t) => ({
+          dashCount: Math.max(0, Math.floor(Number(t.dashCount) || 0) - baseDash),
+          body: t.body
+        }));
+
+        // 确保 root 是第一行，且 level=0
+        const [rootLine] = normalized.splice(rootIdx, 1);
+        normalized.unshift({ ...rootLine, dashCount: 0 });
+
+        // 保证：除 root 外不允许出现 level=0；同时避免出现 level 跳跃导致 “missing parent”
+        for (let i = 1; i < normalized.length; i++) {
+          let d = Math.floor(Number(normalized[i].dashCount) || 0);
+          if (d <= 0) d = 1;
+          const prev = Math.floor(Number(normalized[i - 1].dashCount) || 0);
+          if (d > prev + 1) d = prev + 1;
+          normalized[i].dashCount = d;
+        }
+
+        // 最小重排：把 BYOK Self Test Task 移到 root 的第一个子任务位置
+        const byokIdx = normalized.findIndex((t) => t.body.includes("BYOK Self Test Task"));
+        if (byokIdx > 1) {
+          const [line] = normalized.splice(byokIdx, 1);
+          normalized.splice(1, 0, { ...line, dashCount: 1 });
+        } else if (byokIdx === 1) {
+          normalized[1].dashCount = 1;
+        }
+
+        return normalized.map((t) => `${"-".repeat(Math.max(0, t.dashCount))}${t.body}`).join("\n");
       };
 
-      let rootIdx = lines.findIndex((l) => parseTaskLevel(l) === 0);
-      const byokIdx = lines.findIndex((l) => l.includes("BYOK Self Test Task"));
-
-      // 仅当同时存在 root 与目标 task 行时才重排；否则保持原样也调用一次 reorganize 以覆盖工具可用性。
-      if (rootIdx >= 0 && byokIdx >= 0 && byokIdx !== rootIdx + 1) {
-        const [byokLine] = lines.splice(byokIdx, 1);
-        if (byokIdx < rootIdx) rootIdx -= 1;
-        const insertAt = Math.min(Math.max(0, rootIdx + 1), lines.length);
-        lines.splice(insertAt, 0, byokLine);
-      } else if (rootIdx < 0) {
-        emit("[toolsExec] WARN reorganize_tasklist: failed to locate root task line in view_tasklist markdown; submitting unchanged markdown");
-      }
-
-      // 保护：第一条 task 行必须是 root（level 0），否则回退为原始 markdown，避免 parser 报 “level 1 has no parent”
-      const firstTaskIdx = lines.findIndex((l) => parseTaskLevel(l) != null);
-      const firstLevel = firstTaskIdx >= 0 ? parseTaskLevel(lines[firstTaskIdx]) : null;
-      const markdownToSubmit = firstTaskIdx >= 0 && firstLevel === 0 ? lines.join("\n") : taskMarkdown;
+      const markdownToSubmit = normalizeMarkdownForReorg(taskMarkdown) || taskMarkdown;
       await callIfPresent("reorganize_tasklist", buildToolInputFromSchema(rt2Def, { overrides: { markdown: markdownToSubmit } }));
     }
 

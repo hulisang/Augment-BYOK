@@ -11,6 +11,7 @@ const { buildSmartPasteStreamPrompt } = require("../prompts/smart-paste-stream")
 const { buildCommitMessageStreamPrompt } = require("../prompts/commit-message-stream");
 const { buildConversationTitlePrompt } = require("../prompts/conversation-title");
 const { buildNextEditStreamPrompt } = require("../prompts/next-edit-stream");
+const { buildNextEditLocPrompt } = require("../prompts/next-edit-loc");
 
 function buildFallbackChatPrompt(body) {
   const b = body && typeof body === "object" ? body : {};
@@ -29,6 +30,7 @@ function buildMessagesForEndpoint(endpoint, body) {
   if (ep === "/generate-commit-message-stream") return buildCommitMessageStreamPrompt(body);
   if (ep === "/generate-conversation-title") return buildConversationTitlePrompt(body);
   if (ep === "/next-edit-stream") return buildNextEditStreamPrompt(body);
+  if (ep === "/next_edit_loc") return buildNextEditLocPrompt(body);
   if (ep === "/prompt-enhancer") return buildPromptEnhancerPrompt(body);
   return buildFallbackChatPrompt(body);
 }

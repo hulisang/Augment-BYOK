@@ -107,7 +107,7 @@ const LLM_ENDPOINT_SPECS = [
     upstreamBackType: "BackNextEditLocationResult",
     inputKeys: ["instruction", "path", "diagnostics?", "recent_changes?", "blobs?", "edit_events?", "vcs_change?", "num_results?", "is_single_file?"],
     outputKeys: ["candidate_locations[]", "unknown_blob_names[]", "checkpoint_not_found", "critical_errors[]"],
-    byokImpl: "shim.maybeHandleCallApi(/next_edit_loc): diagnostics-first candidates + fallback(path@0)"
+    byokImpl: "provider.completeText -> parse candidate_locations + diagnostics-first fallback"
   }
 ];
 

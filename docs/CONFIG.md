@@ -17,14 +17,12 @@
 
 ## 配置结构（v1，概要）
 
-- `enabled`：配置层总开关
 - `official`：`completionUrl` / `apiToken`（用于 `/get-models` 合并 + 官方上下文注入）
 - `providers[]`：上游列表
   - `id`：provider 标识（`byok:<providerId>:...`）
   - `type`：`openai_compatible` | `openai_responses` | `anthropic` | `gemini_ai_studio`
   - `baseUrl`、`apiKey`（可空，若 `headers` 已含鉴权）、`headers`、`models`、`defaultModel`、`requestDefaults`
-- `routing`：`defaultMode`（`official|byok|disabled`）、`defaultProviderId`、`rules[endpoint]`
-- `timeouts.upstreamMs`：上游超时
+- `routing`：`defaultProviderId`、`rules[endpoint]`（`mode=official|byok|disabled`）
 - `historySummary`：面板只暴露 `enabled` + `model`；其它字段默认/保留
 - `telemetry.disabledEndpoints`：legacy（会迁移到 `routing.rules[*].mode=disabled`）
 

@@ -21,7 +21,6 @@ function isValidHistorySummaryTemplateNewMode(template) {
 function defaultConfig() {
   return {
     version: 1,
-    enabled: true,
     official: {
       completionUrl: "https://api.augmentcode.com/",
       apiToken: ""
@@ -80,7 +79,6 @@ function defaultConfig() {
       }
     ],
     routing: {
-      defaultMode: "official",
       defaultProviderId: "",
       rules: {
         "/get-models": { mode: "byok" },
@@ -104,16 +102,15 @@ function defaultConfig() {
         "/client-metrics": { mode: "disabled" },
         "/client-completion-timelines": { mode: "disabled" },
         "/record-preference-sample": { mode: "disabled" },
-        "/record-request-events": { mode: "disabled" },
+        "/record-request-events": { mode: "official" },
         "/record-session-events": { mode: "disabled" },
         "/record-user-events": { mode: "disabled" },
-        "/report-error": { mode: "disabled" },
+        "/report-error": { mode: "official" },
         "/resolve-completions": { mode: "disabled" },
         "/resolve-edit": { mode: "disabled" },
         "/resolve-instruction": { mode: "disabled" }
       }
     },
-    timeouts: { upstreamMs: 120000 },
     telemetry: {
       disabledEndpoints: []
     }
@@ -147,9 +144,6 @@ function normalizeConfig(raw) {
   const out = defaultConfig();
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
 
-  const enabled = get(raw, ["enabled"]);
-  if (typeof enabled === "boolean") out.enabled = enabled;
-
   const version = get(raw, ["version"]);
   if (Number.isFinite(Number(version)) && Number(version) > 0) out.version = Number(version);
 
@@ -158,10 +152,6 @@ function normalizeConfig(raw) {
   if (completionUrl) out.official.completionUrl = completionUrl;
   const apiToken = normalizeString(get(official, ["api_token", "apiToken"]));
   if (apiToken) out.official.apiToken = apiToken;
-
-  const timeouts = get(raw, ["timeouts"]);
-  const upstreamMs = get(timeouts, ["upstream_ms", "upstreamMs"]);
-  if (Number.isFinite(Number(upstreamMs)) && Number(upstreamMs) > 0) out.timeouts.upstreamMs = Number(upstreamMs);
 
   const telemetry = get(raw, ["telemetry"]);
   const disabledEndpoints = get(telemetry, ["disabled_endpoints", "disabledEndpoints"]);
@@ -240,9 +230,6 @@ function normalizeConfig(raw) {
   }
 
   const routing = get(raw, ["routing"]);
-  const defaultMode = normalizeMode(get(routing, ["default_mode", "defaultMode"])) || out.routing.defaultMode;
-  out.routing.defaultMode = defaultMode;
-
   const defaultProviderId = normalizeString(get(routing, ["default_provider_id", "defaultProviderId"]));
   if (defaultProviderId) out.routing.defaultProviderId = defaultProviderId;
 
@@ -252,7 +239,7 @@ function normalizeConfig(raw) {
     for (const [k, v] of Object.entries(rules)) {
       const ep = normalizeEndpoint(k);
       if (!ep) continue;
-      const mode = normalizeMode(get(v, ["mode"])) || out.routing.defaultMode;
+      const mode = normalizeMode(get(v, ["mode"])) || "official";
       const providerId = normalizeString(get(v, ["provider_id", "providerId"]));
       const model = normalizeString(get(v, ["model"]));
       out.routing.rules[ep] = { mode, providerId, model };

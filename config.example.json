@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "enabled": true,
   "official": {
     "completionUrl": "https://your-tenant.augmentcode.com/",
     "apiToken": "ace_your_official_token"
@@ -48,7 +47,6 @@
     }
   ],
   "routing": {
-    "defaultMode": "official",
     "defaultProviderId": "",
     "rules": {
       "/get-models": { "mode": "byok" },
@@ -68,10 +66,10 @@
       "/client-metrics": { "mode": "disabled" },
       "/client-completion-timelines": { "mode": "disabled" },
       "/record-preference-sample": { "mode": "disabled" },
-      "/record-request-events": { "mode": "disabled" },
+      "/record-request-events": { "mode": "official" },
       "/record-session-events": { "mode": "disabled" },
       "/record-user-events": { "mode": "disabled" },
-      "/report-error": { "mode": "disabled" },
+      "/report-error": { "mode": "official" },
       "/resolve-completions": { "mode": "disabled" },
       "/resolve-edit": { "mode": "disabled" },
       "/resolve-instruction": { "mode": "disabled" }
@@ -81,6 +79,5 @@
     "enabled": false,
     "providerId": "",
     "model": ""
-  },
-  "timeouts": { "upstreamMs": 120000 }
+  }
 }

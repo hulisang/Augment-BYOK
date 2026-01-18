@@ -111,7 +111,16 @@ function buildSystem({ purpose, directives, outputConstraints }) {
 function extractCodeContext(body) {
   const b = body && typeof body === "object" ? body : {};
   const prefix = typeof b.prefix === "string" ? b.prefix : "";
-  const selectedText = typeof b.selected_text === "string" ? b.selected_text : (typeof b.selected_code === "string" ? b.selected_code : "");
+  const selectedText =
+    typeof b.selected_text === "string"
+      ? b.selected_text
+      : typeof b.selectedText === "string"
+        ? b.selectedText
+        : typeof b.selected_code === "string"
+          ? b.selected_code
+          : typeof b.selectedCode === "string"
+            ? b.selectedCode
+            : "";
   const suffix = typeof b.suffix === "string" ? b.suffix : "";
   return { prefix, selectedText, suffix, combined: `${prefix}${selectedText}${suffix}` };
 }
