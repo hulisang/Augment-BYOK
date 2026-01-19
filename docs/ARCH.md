@@ -11,7 +11,7 @@
   - prepend injector：`vendor/augment-interceptor/inject-code.augment-interceptor.v1.2.txt`
   - 注入 bootstrap：`./byok/runtime/bootstrap`
   - official overrides：`completionURL/apiToken` 改为 `globalState`
-  - callApi/callApiStream shim：优先走 `./byok/runtime/shim`（`byok|official|disabled`）
+  - callApi shim：优先走 `./byok/runtime/shim-call-api`；callApiStream shim：优先走 `./byok/runtime/shim-call-api-stream`（`byok|official|disabled`）
   - guard：`autoAuth=0`、marker 存在、`node --check`、合约检查
 - repack → `dist/*.vsix` + `upstream.lock.json` / `dist/upstream.lock.json`
 
@@ -22,6 +22,6 @@
 
 代码布局（主要都在 `payload/extension/out/byok/*`）：
 
-- `runtime/bootstrap.js`、`runtime/shim.js`
+- `runtime/bootstrap.js`、`runtime/shim-call-api.js`、`runtime/shim-call-api-stream.js`
 - `config/config.js`、`config/state.js`
 - `ui/config-panel.*`、`core/*`、`providers/*`

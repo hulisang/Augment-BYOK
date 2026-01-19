@@ -33,7 +33,8 @@ function patchCallApiShim(filePath) {
   const original = fs.readFileSync(filePath, "utf8");
   if (original.includes(MARKER)) return { changed: false, reason: "already_patched" };
 
-  const shimPath = "./byok/runtime/shim";
+  const callApiShimPath = "./byok/runtime/shim-call-api";
+  const callApiStreamShimPath = "./byok/runtime/shim-call-api-stream";
 
   const sanitizeBody =
     `const __byok_body=arguments[3];` +
@@ -42,19 +43,18 @@ function patchCallApiShim(filePath) {
     `try{delete __byok_body.thirdPartyOverride}catch{}` +
     `}`;
 
-  const apiInjection =
-    `const __byok_ep=typeof arguments[2]==="string"?arguments[2]:"";` +
-    sanitizeBody +
-    `const __byok_url=typeof arguments[5]==="string"?arguments[5]:(arguments[5]&&typeof arguments[5].toString==="function"?arguments[5].toString():"");` +
-    `const __byok_res=await require("${shimPath}").maybeHandleCallApi({endpoint:__byok_ep,body:arguments[3],transform:arguments[4],timeoutMs:arguments[6],abortSignal:arguments[8],upstreamApiToken:(arguments[10]??((arguments[1]||{}).apiToken)),upstreamCompletionURL:__byok_url});` +
-    `if(__byok_res!==void 0)return __byok_res;`;
+  function makeInjection({ shimPath, exportName }) {
+    return (
+      `const __byok_ep=typeof arguments[2]==="string"?arguments[2]:"";` +
+      sanitizeBody +
+      `const __byok_url=typeof arguments[5]==="string"?arguments[5]:(arguments[5]&&typeof arguments[5].toString==="function"?arguments[5].toString():"");` +
+      `const __byok_res=await require("${shimPath}").${exportName}({endpoint:__byok_ep,body:arguments[3],transform:arguments[4],timeoutMs:arguments[6],abortSignal:arguments[8],upstreamApiToken:(arguments[10]??((arguments[1]||{}).apiToken)),upstreamCompletionURL:__byok_url});` +
+      `if(__byok_res!==void 0)return __byok_res;`
+    );
+  }
 
-  const streamInjection =
-    `const __byok_ep=typeof arguments[2]==="string"?arguments[2]:"";` +
-    sanitizeBody +
-    `const __byok_url=typeof arguments[5]==="string"?arguments[5]:(arguments[5]&&typeof arguments[5].toString==="function"?arguments[5].toString():"");` +
-    `const __byok_res=await require("${shimPath}").maybeHandleCallApiStream({endpoint:__byok_ep,body:arguments[3],transform:arguments[4],timeoutMs:arguments[6],abortSignal:arguments[8],upstreamApiToken:(arguments[10]??((arguments[1]||{}).apiToken)),upstreamCompletionURL:__byok_url});` +
-    `if(__byok_res!==void 0)return __byok_res;`;
+  const apiInjection = makeInjection({ shimPath: callApiShimPath, exportName: "maybeHandleCallApi" });
+  const streamInjection = makeInjection({ shimPath: callApiStreamShimPath, exportName: "maybeHandleCallApiStream" });
 
   let next = original;
   const apiRes = injectIntoAsyncMethods(next, "callApi", apiInjection);

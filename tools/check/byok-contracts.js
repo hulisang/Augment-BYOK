@@ -193,7 +193,8 @@ function main() {
 
   const requiredRelFiles = [
     "out/byok/runtime/bootstrap.js",
-    "out/byok/runtime/shim.js",
+    "out/byok/runtime/shim-call-api.js",
+    "out/byok/runtime/shim-call-api-stream.js",
     "out/byok/config/config.js",
     "out/byok/config/state.js",
     "out/byok/config/official.js",
