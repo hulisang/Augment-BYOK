@@ -5,7 +5,7 @@ const { normalizeString } = require("../infra/util");
 const { normalizeUsageInt, makeToolMetaGetter, assertSseResponse } = require("./provider-util");
 const { extractErrorMessageFromJson } = require("./request-util");
 const { buildMinimalRetryRequestDefaults, postAnthropicWithFallbacks } = require("./anthropic-request");
-const { stripAnthropicToolBlocksFromMessages } = require("../core/anthropic-blocks");
+const { stripAnthropicToolBlocksFromMessages, stripAnthropicImageBlocksFromMessages } = require("../core/anthropic-blocks");
 const { extractTextFromAnthropicJson, emitAnthropicJsonAsAugmentChunks } = require("./anthropic-json-util");
 const {
   STOP_REASON_END_TURN,
@@ -96,6 +96,7 @@ async function* anthropicStreamTextDeltas({ baseUrl, apiKey, model, system, mess
 async function* anthropicChatStreamChunks({ baseUrl, apiKey, model, system, messages, tools, timeoutMs, abortSignal, extraHeaders, requestDefaults, toolMetaByName, supportToolUseStart }) {
   const minimalDefaults = buildMinimalRetryRequestDefaults(requestDefaults);
   const strippedMessages = stripAnthropicToolBlocksFromMessages(messages, { maxToolTextLen: 8000 });
+  const strippedNoImageMessages = stripAnthropicImageBlocksFromMessages(strippedMessages);
   const resp = await postAnthropicWithFallbacks({
     baseLabel: "Anthropic(chat-stream)",
     timeoutMs,
@@ -113,7 +114,7 @@ async function* anthropicChatStreamChunks({ baseUrl, apiKey, model, system, mess
       },
       {
         labelSuffix: ":no-tools",
-        request: { baseUrl, apiKey, model, system, messages: strippedMessages, tools: [], extraHeaders, requestDefaults: minimalDefaults, stream: true }
+        request: { baseUrl, apiKey, model, system, messages: strippedNoImageMessages, tools: [], extraHeaders, requestDefaults: minimalDefaults, stream: true }
       }
     ]
   });

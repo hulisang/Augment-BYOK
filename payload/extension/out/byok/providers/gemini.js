@@ -3,6 +3,7 @@
 const { joinBaseUrl } = require("./http");
 const { parseSse } = require("./sse");
 const { normalizeString, requireString, normalizeRawToken, stripByokInternalKeys } = require("../infra/util");
+const { debug } = require("../infra/log");
 const { withJsonContentType } = require("./headers");
 const { makeToolMetaGetter, assertSseResponse } = require("./provider-util");
 const { fetchOkWithRetry, extractErrorMessageFromJson } = require("./request-util");
@@ -15,6 +16,8 @@ const {
   extractGeminiStopReasonFromCandidate,
   emitGeminiChatJsonAsAugmentChunks
 } = require("./gemini-json-util");
+
+const GEMINI_FALLBACK_STATUSES = new Set([400, 422]);
 
 function normalizeGeminiModel(model) {
   const m = requireString(model, "Gemini model");
@@ -60,9 +63,115 @@ function extractGeminiTextFromResponse(json) {
   return out;
 }
 
+function stripGeminiInlineDataFromContents(contents, opts) {
+  const placeholder =
+    typeof opts?.placeholderText === "string" && opts.placeholderText.trim() ? opts.placeholderText.trim() : "[image omitted]";
+  const input = Array.isArray(contents) ? contents : [];
+  const out = [];
+  let changed = false;
+
+  for (const c of input) {
+    if (!c || typeof c !== "object") {
+      out.push(c);
+      continue;
+    }
+    const parts = Array.isArray(c.parts) ? c.parts : [];
+    if (!parts.length) {
+      out.push(c);
+      continue;
+    }
+
+    let localChanged = false;
+    const rewritten = [];
+    for (const p of parts) {
+      if (!p || typeof p !== "object") continue;
+      if (p.inlineData && typeof p.inlineData === "object") {
+        rewritten.push({ text: placeholder });
+        localChanged = true;
+      } else rewritten.push(p);
+    }
+    if (localChanged) {
+      out.push({ ...c, parts: rewritten });
+      changed = true;
+    } else out.push(c);
+  }
+
+  return { contents: changed ? out : input, changed };
+}
+
+async function fetchGeminiWithFallbacks({
+  baseUrl,
+  apiKey,
+  model,
+  systemInstruction,
+  contents,
+  tools,
+  extraHeaders,
+  requestDefaults,
+  stream,
+  timeoutMs,
+  abortSignal,
+  label
+} = {}) {
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  const noImages = stripGeminiInlineDataFromContents(contents);
+
+  const attempts = [
+    { labelSuffix: "", tools, requestDefaults, contents },
+    { labelSuffix: ":no-defaults", tools, requestDefaults: {}, contents }
+  ];
+  if (noImages.changed) attempts.push({ labelSuffix: ":no-images", tools, requestDefaults: {}, contents: noImages.contents });
+  if (hasTools) {
+    attempts.push({ labelSuffix: ":no-tools", tools: [], requestDefaults: {}, contents });
+    if (noImages.changed) attempts.push({ labelSuffix: ":no-tools-no-images", tools: [], requestDefaults: {}, contents: noImages.contents });
+  }
+
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    const { url, headers, body } = buildGeminiRequest({
+      baseUrl,
+      apiKey,
+      model,
+      systemInstruction,
+      contents: a.contents ?? contents,
+      tools: a.tools,
+      extraHeaders,
+      requestDefaults: a.requestDefaults,
+      stream: Boolean(stream)
+    });
+    const lab = `${normalizeString(label) || "Gemini"}${a.labelSuffix || ""}`;
+
+    try {
+      return await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: lab });
+    } catch (err) {
+      lastErr = err;
+      const status = err && typeof err === "object" ? Number(err.status) : NaN;
+      const canFallback = Number.isFinite(status) && GEMINI_FALLBACK_STATUSES.has(status);
+      const hasNext = i + 1 < attempts.length;
+      if (!canFallback || !hasNext) throw err;
+      debug(`${lab} fallback: retry (status=${status})`);
+    }
+  }
+
+  throw lastErr || new Error("Gemini request failed");
+}
+
 async function geminiCompleteText({ baseUrl, apiKey, model, systemInstruction, contents, timeoutMs, abortSignal, extraHeaders, requestDefaults }) {
-  const { url, headers, body } = buildGeminiRequest({ baseUrl, apiKey, model, systemInstruction, contents, tools: [], extraHeaders, requestDefaults, stream: false });
-  const resp = await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: "Gemini" });
+  const resp = await fetchGeminiWithFallbacks({
+    baseUrl,
+    apiKey,
+    model,
+    systemInstruction,
+    contents,
+    tools: [],
+    extraHeaders,
+    requestDefaults,
+    stream: false,
+    timeoutMs,
+    abortSignal,
+    label: "Gemini"
+  });
   const json = await resp.json().catch(() => null);
   const text = extractGeminiTextFromResponse(json);
   if (!text) throw new Error("Gemini 响应缺少 candidates[0].content.parts[].text");
@@ -70,8 +179,20 @@ async function geminiCompleteText({ baseUrl, apiKey, model, systemInstruction, c
 }
 
 async function* geminiStreamTextDeltas({ baseUrl, apiKey, model, systemInstruction, contents, timeoutMs, abortSignal, extraHeaders, requestDefaults }) {
-  const { url, headers, body } = buildGeminiRequest({ baseUrl, apiKey, model, systemInstruction, contents, tools: [], extraHeaders, requestDefaults, stream: true });
-  const resp = await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: "Gemini(stream)" });
+  const resp = await fetchGeminiWithFallbacks({
+    baseUrl,
+    apiKey,
+    model,
+    systemInstruction,
+    contents,
+    tools: [],
+    extraHeaders,
+    requestDefaults,
+    stream: true,
+    timeoutMs,
+    abortSignal,
+    label: "Gemini(stream)"
+  });
   const contentType = normalizeString(resp?.headers?.get?.("content-type")).toLowerCase();
   if (contentType.includes("json")) {
     const json = await resp.json().catch(() => null);
@@ -131,8 +252,20 @@ async function* geminiStreamTextDeltas({ baseUrl, apiKey, model, systemInstructi
 async function* geminiChatStreamChunks({ baseUrl, apiKey, model, systemInstruction, contents, tools, timeoutMs, abortSignal, extraHeaders, requestDefaults, toolMetaByName, supportToolUseStart }) {
   const getToolMeta = makeToolMetaGetter(toolMetaByName);
 
-  const { url, headers, body } = buildGeminiRequest({ baseUrl, apiKey, model, systemInstruction, contents, tools, extraHeaders, requestDefaults, stream: true });
-  const resp = await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: "Gemini(chat-stream)" });
+  const resp = await fetchGeminiWithFallbacks({
+    baseUrl,
+    apiKey,
+    model,
+    systemInstruction,
+    contents,
+    tools,
+    extraHeaders,
+    requestDefaults,
+    stream: true,
+    timeoutMs,
+    abortSignal,
+    label: "Gemini(chat-stream)"
+  });
   const contentType = normalizeString(resp?.headers?.get?.("content-type")).toLowerCase();
   if (contentType.includes("json")) {
     const json = await resp.json().catch(() => null);

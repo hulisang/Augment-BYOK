@@ -19,24 +19,42 @@ const {
 
 const {
   buildOpenAiRequest,
+  buildMinimalRetryRequestDefaults,
   postOpenAiChatStreamWithFallbacks,
 } = require("./openai-chat-completions-util");
 const { extractTextFromChatCompletionJson, emitChatCompletionJsonAsAugmentChunks } = require("./openai-chat-completions-json-util");
 
+const OPENAI_FALLBACK_STATUSES = new Set([400, 422]);
+
 async function openAiCompleteText({ baseUrl, apiKey, model, messages, timeoutMs, abortSignal, extraHeaders, requestDefaults }) {
-  const { url, headers, body } = buildOpenAiRequest({
-    baseUrl,
-    apiKey,
-    model,
-    messages,
-    tools: [],
-    extraHeaders,
-    requestDefaults,
-    stream: false,
-    includeUsage: false,
-    includeToolChoice: false
-  });
-  const resp = await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: "OpenAI" });
+  const minimalDefaults = buildMinimalRetryRequestDefaults(requestDefaults);
+
+  const fetchOnce = async (rd, labelSuffix) => {
+    const { url, headers, body } = buildOpenAiRequest({
+      baseUrl,
+      apiKey,
+      model,
+      messages,
+      tools: [],
+      extraHeaders,
+      requestDefaults: rd,
+      stream: false,
+      includeUsage: false,
+      includeToolChoice: false
+    });
+    const lab = normalizeString(labelSuffix) ? `OpenAI${labelSuffix}` : "OpenAI";
+    return await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: lab });
+  };
+
+  let resp;
+  try {
+    resp = await fetchOnce(requestDefaults, "");
+  } catch (err) {
+    const status = err && typeof err === "object" ? Number(err.status) : NaN;
+    const canFallback = Number.isFinite(status) && OPENAI_FALLBACK_STATUSES.has(status);
+    if (!canFallback) throw err;
+    resp = await fetchOnce(minimalDefaults, ":minimal-defaults");
+  }
   const json = await resp.json().catch(() => null);
   const text = extractTextFromChatCompletionJson(json);
   if (text) return text;
@@ -44,19 +62,35 @@ async function openAiCompleteText({ baseUrl, apiKey, model, messages, timeoutMs,
 }
 
 async function* openAiStreamTextDeltas({ baseUrl, apiKey, model, messages, timeoutMs, abortSignal, extraHeaders, requestDefaults }) {
-  const { url, headers, body } = buildOpenAiRequest({
-    baseUrl,
-    apiKey,
-    model,
-    messages,
-    tools: [],
-    extraHeaders,
-    requestDefaults,
-    stream: true,
-    includeUsage: false,
-    includeToolChoice: false
-  });
-  const resp = await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: "OpenAI(stream)" });
+  const minimalDefaults = buildMinimalRetryRequestDefaults(requestDefaults);
+
+  const fetchOnce = async (rd, labelSuffix) => {
+    const { url, headers, body } = buildOpenAiRequest({
+      baseUrl,
+      apiKey,
+      model,
+      messages,
+      tools: [],
+      extraHeaders,
+      requestDefaults: rd,
+      stream: true,
+      includeUsage: false,
+      includeToolChoice: false
+    });
+    const lab = normalizeString(labelSuffix) ? `OpenAI(stream)${labelSuffix}` : "OpenAI(stream)";
+    return await fetchOkWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs, abortSignal, label: lab });
+  };
+
+  let resp;
+  try {
+    resp = await fetchOnce(requestDefaults, "");
+  } catch (err) {
+    const status = err && typeof err === "object" ? Number(err.status) : NaN;
+    const canFallback = Number.isFinite(status) && OPENAI_FALLBACK_STATUSES.has(status);
+    if (!canFallback) throw err;
+    resp = await fetchOnce(minimalDefaults, ":minimal-defaults");
+  }
+
   const contentType = normalizeString(resp?.headers?.get?.("content-type")).toLowerCase();
   if (contentType.includes("json")) {
     const json = await resp.json().catch(() => null);

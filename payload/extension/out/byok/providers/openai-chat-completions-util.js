@@ -95,6 +95,48 @@ function convertOpenAiToolsToFunctions(tools) {
   return out;
 }
 
+function stripVisionFromMessages(messages) {
+  const input = Array.isArray(messages) ? messages : [];
+  const out = [];
+  let changed = false;
+
+  for (const msg of input) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    const content = msg.content;
+    if (!Array.isArray(content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const textParts = [];
+    let sawNonText = false;
+    for (const p of content) {
+      if (!p || typeof p !== "object") continue;
+      const t = normalizeString(p.type);
+      if (t === "text" && typeof p.text === "string" && p.text.trim()) textParts.push(p.text.trim());
+      else sawNonText = true;
+    }
+
+    // 对不支持多模态/多段 content 的网关：把 parts 压平成纯文本（并提示省略了非文本部分）。
+    const base = textParts.join("\n\n").trim();
+    const suffix = sawNonText ? "[non-text content omitted]" : "";
+    const asText = base && suffix ? `${base}\n\n${suffix}` : base || suffix;
+    if (!asText) {
+      out.push(msg);
+      continue;
+    }
+
+    out.push({ ...msg, content: asText });
+    changed = true;
+  }
+
+  return { messages: changed ? out : input, changed };
+}
+
 function buildOrphanToolResultAsUserContent(msg, { maxLen = 8000 } = {}) {
   const id = normalizeString(msg?.tool_call_id);
   const raw = typeof msg?.content === "string" ? msg.content : String(msg?.content ?? "");
@@ -179,25 +221,39 @@ async function fetchOpenAiChatStreamResponseWithFunctions({ baseUrl, apiKey, mod
 
 async function postOpenAiChatStreamWithFallbacks({ baseUrl, apiKey, model, messages, tools, timeoutMs, abortSignal, extraHeaders, requestDefaults }) {
   const minimalDefaults = buildMinimalRetryRequestDefaults(requestDefaults);
+  const visionStripped = stripVisionFromMessages(messages);
+
   const attempts = [
     { mode: "tools", includeUsage: true, includeToolChoice: true, tools, requestDefaults },
     { mode: "tools", includeUsage: false, includeToolChoice: true, tools, requestDefaults },
     { mode: "tools", includeUsage: false, includeToolChoice: false, tools, requestDefaults },
     { mode: "tools", includeUsage: false, includeToolChoice: false, tools, requestDefaults: minimalDefaults },
-    { mode: "functions", functions: convertOpenAiToolsToFunctions(tools), requestDefaults: minimalDefaults },
+    {
+      mode: "functions",
+      functions: convertOpenAiToolsToFunctions(tools),
+      requestDefaults: minimalDefaults,
+      messages: visionStripped.changed ? visionStripped.messages : null
+    },
     { mode: "tools", includeUsage: false, includeToolChoice: false, tools: [], requestDefaults: minimalDefaults }
   ];
+  if (visionStripped.changed) {
+    attempts.push(
+      { mode: "tools", includeUsage: false, includeToolChoice: false, tools, requestDefaults: minimalDefaults, messages: visionStripped.messages },
+      { mode: "tools", includeUsage: false, includeToolChoice: false, tools: [], requestDefaults: minimalDefaults, messages: visionStripped.messages }
+    );
+  }
 
   let lastErr = null;
   for (let i = 0; i < attempts.length; i++) {
     const a = attempts[i];
+    const attemptMessages = Array.isArray(a.messages) ? a.messages : messages;
     try {
       if (a.mode === "functions") {
         return await fetchOpenAiChatStreamResponseWithFunctions({
           baseUrl,
           apiKey,
           model,
-          messages: convertMessagesToFunctionCalling(messages),
+          messages: convertMessagesToFunctionCalling(attemptMessages),
           functions: a.functions,
           timeoutMs,
           abortSignal,
@@ -209,7 +265,7 @@ async function postOpenAiChatStreamWithFallbacks({ baseUrl, apiKey, model, messa
         baseUrl,
         apiKey,
         model,
-        messages,
+        messages: attemptMessages,
         tools: a.tools,
         timeoutMs,
         abortSignal,
@@ -229,6 +285,7 @@ async function postOpenAiChatStreamWithFallbacks({ baseUrl, apiKey, model, messa
 }
 
 module.exports = {
+  buildMinimalRetryRequestDefaults,
   buildOpenAiRequest,
   postOpenAiChatStreamWithFallbacks
 };

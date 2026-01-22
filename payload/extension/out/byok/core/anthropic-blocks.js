@@ -79,10 +79,44 @@ function stripAnthropicToolBlocksFromMessages(messages, opts) {
   return out;
 }
 
+function stripAnthropicImageBlocksFromMessages(messages, opts) {
+  const placeholder =
+    typeof opts?.placeholderText === "string" && opts.placeholderText.trim() ? opts.placeholderText.trim() : "[image omitted]";
+  const input = Array.isArray(messages) ? messages : [];
+  const out = [];
+  for (const msg of input) {
+    const content = msg?.content;
+    if (!Array.isArray(content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const blocks = content.filter((b) => b && typeof b === "object");
+    if (!blocks.length) {
+      out.push(msg);
+      continue;
+    }
+
+    let changed = false;
+    const rewritten = [];
+    for (const b of blocks) {
+      const t = normalizeString(b.type);
+      if (t === "image") {
+        rewritten.push({ type: "text", text: placeholder });
+        changed = true;
+        continue;
+      }
+      rewritten.push(b);
+    }
+    out.push(changed ? { ...msg, content: rewritten } : msg);
+  }
+  return out;
+}
+
 module.exports = {
   normalizeAnthropicBlocks,
   stringifyAnthropicToolResultContent,
   buildOrphanAnthropicToolResultAsTextBlock,
-  stripAnthropicToolBlocksFromMessages
+  stripAnthropicToolBlocksFromMessages,
+  stripAnthropicImageBlocksFromMessages
 };
-

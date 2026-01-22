@@ -75,7 +75,9 @@ function buildGeminiToolResultsParts(nodes, { toolNameByUseId, pendingById }) {
     }
 
     const parsed = tryParseJsonObject(text);
-    const response = parsed ? parsed : { content: text };
+    const response = parsed ? { ...parsed } : { content: text };
+    if (!("tool_use_id" in response)) response.tool_use_id = toolUseId;
+    if (!("tool_name" in response)) response.tool_name = toolName;
     if (isError) response.error = true;
     parts.push({ functionResponse: { name: toolName, response } });
     if (pendingById && pendingById.has(toolUseId)) pendingById.delete(toolUseId);
