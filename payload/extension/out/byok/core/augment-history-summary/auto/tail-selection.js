@@ -7,7 +7,7 @@ const { REQUEST_NODE_TOOL_RESULT } = require("../../augment-protocol");
 
 const { asArray, pick, normalizeNodeType } = shared;
 
-const { estimateExchangeSizeChars } = require("./estimate");
+const { estimateExchangeSizeBytes } = require("./estimate");
 
 function nodeIsToolResult(n) {
   if (normalizeNodeType(n) !== REQUEST_NODE_TOOL_RESULT) return false;
@@ -19,28 +19,28 @@ function exchangeHasToolResults(h) {
   return exchangeRequestNodes(h).some(nodeIsToolResult);
 }
 
-function splitHistoryForSummary(history, tailSizeCharsToExclude, triggerOnHistorySizeChars, minTailExchanges) {
+function splitHistoryForSummary(history, tailSizeBytesToExclude, triggerOnHistorySizeBytes, minTailExchanges) {
   const hs = asArray(history);
   if (!hs.length) return { head: [], tail: [] };
   const headRev = [];
   const tailRev = [];
-  let seenChars = 0;
-  let headChars = 0;
-  let tailChars = 0;
+  let seenBytes = 0;
+  let headBytes = 0;
+  let tailBytes = 0;
   for (let i = hs.length - 1; i >= 0; i--) {
     const ex = hs[i];
-    const sz = estimateExchangeSizeChars(ex);
-    if (seenChars + sz < tailSizeCharsToExclude || tailRev.length < minTailExchanges) {
+    const sz = estimateExchangeSizeBytes(ex);
+    if (seenBytes + sz < tailSizeBytesToExclude || tailRev.length < minTailExchanges) {
       tailRev.push(ex);
-      tailChars += sz;
+      tailBytes += sz;
     } else {
       headRev.push(ex);
-      headChars += sz;
+      headBytes += sz;
     }
-    seenChars += sz;
+    seenBytes += sz;
   }
-  const totalChars = headChars + tailChars;
-  if (totalChars < triggerOnHistorySizeChars) {
+  const totalBytes = headBytes + tailBytes;
+  if (totalBytes < triggerOnHistorySizeBytes) {
     const all = tailRev.concat(headRev).reverse();
     return { head: [], tail: all };
   }

@@ -1,45 +1,46 @@
 "use strict";
 
+const { utf8ByteLen } = require("../../../infra/util");
 const shared = require("../../augment-chat/shared");
 const { exchangeRequestNodes, exchangeResponseNodes } = require("../abridged");
 const { REQUEST_NODE_TOOL_RESULT } = require("../../augment-protocol");
 
-const { asRecord, asArray, asString, pick, normalizeNodeType } = shared;
+const { asRecord, asArray, pick, normalizeNodeType } = shared;
 
 function approxTokenCountFromByteLen(len) {
   const BYTES_PER_TOKEN = 4;
   return Math.ceil(Number(len) / BYTES_PER_TOKEN);
 }
 
-function estimateRequestExtraSizeChars(req) {
+function estimateRequestExtraSizeBytes(req) {
   const r = asRecord(req);
   return (
-    asString(pick(r, ["prefix"])).length +
-    asString(pick(r, ["selected_code", "selectedCode"])).length +
-    asString(pick(r, ["suffix"])).length +
-    asString(pick(r, ["diff"])).length
+    utf8ByteLen(pick(r, ["prefix"])) +
+    utf8ByteLen(pick(r, ["selected_code", "selectedCode"])) +
+    utf8ByteLen(pick(r, ["suffix"])) +
+    utf8ByteLen(pick(r, ["diff"]))
   );
 }
 
-function estimateNodeSizeChars(node) {
+function estimateNodeSizeBytes(node) {
   const n = asRecord(node);
   let out = 16;
-  out += asString(pick(n, ["content"])).length;
-  out += asString(pick(pick(n, ["text_node", "textNode"]), ["content"])).length;
+  out += utf8ByteLen(pick(n, ["content"]));
+  out += utf8ByteLen(pick(pick(n, ["text_node", "textNode"]), ["content"]));
   const tr = asRecord(pick(n, ["tool_result_node", "toolResultNode"]));
   if (normalizeNodeType(n) === REQUEST_NODE_TOOL_RESULT) {
-    out += asString(pick(tr, ["tool_use_id", "toolUseId"])).length;
-    out += asString(pick(tr, ["content"])).length;
+    out += utf8ByteLen(pick(tr, ["tool_use_id", "toolUseId"]));
+    out += utf8ByteLen(pick(tr, ["content"]));
     for (const c of asArray(pick(tr, ["content_nodes", "contentNodes"]))) {
       const cr = asRecord(c);
       out += 8;
-      out += asString(pick(cr, ["text_content", "textContent"])).length;
+      out += utf8ByteLen(pick(cr, ["text_content", "textContent"]));
       const img = asRecord(pick(cr, ["image_content", "imageContent"]));
-      out += asString(pick(img, ["image_data", "imageData"])).length;
+      out += utf8ByteLen(pick(img, ["image_data", "imageData"]));
     }
   }
   const img = asRecord(pick(n, ["image_node", "imageNode"]));
-  out += asString(pick(img, ["image_data", "imageData"])).length;
+  out += utf8ByteLen(pick(img, ["image_data", "imageData"]));
   for (const v of [
     pick(n, ["image_id_node", "imageIdNode"]),
     pick(n, ["ide_state_node", "ideStateNode"]),
@@ -52,37 +53,37 @@ function estimateNodeSizeChars(node) {
   ]) {
     if (v == null) continue;
     try {
-      out += JSON.stringify(v).length;
+      out += utf8ByteLen(JSON.stringify(v));
     } catch {}
   }
   const tu = asRecord(pick(n, ["tool_use", "toolUse"]));
-  out += asString(pick(tu, ["tool_use_id", "toolUseId"])).length;
-  out += asString(pick(tu, ["tool_name", "toolName"])).length;
-  out += asString(pick(tu, ["input_json", "inputJson"])).length;
-  out += asString(pick(tu, ["mcp_server_name", "mcpServerName"])).length;
-  out += asString(pick(tu, ["mcp_tool_name", "mcpToolName"])).length;
+  out += utf8ByteLen(pick(tu, ["tool_use_id", "toolUseId"]));
+  out += utf8ByteLen(pick(tu, ["tool_name", "toolName"]));
+  out += utf8ByteLen(pick(tu, ["input_json", "inputJson"]));
+  out += utf8ByteLen(pick(tu, ["mcp_server_name", "mcpServerName"]));
+  out += utf8ByteLen(pick(tu, ["mcp_tool_name", "mcpToolName"]));
   const th = asRecord(pick(n, ["thinking", "thinking_node", "thinkingNode"]));
-  out += asString(pick(th, ["summary"])).length;
+  out += utf8ByteLen(pick(th, ["summary"]));
   return out;
 }
 
-function estimateExchangeSizeChars(exchange) {
+function estimateExchangeSizeBytes(exchange) {
   const it = asRecord(exchange);
   const reqNodes = exchangeRequestNodes(it);
   const respNodes = exchangeResponseNodes(it);
   let n = 0;
-  n += reqNodes.length ? reqNodes.map(estimateNodeSizeChars).reduce((a, b) => a + b, 0) : asString(it.request_message).length;
-  n += respNodes.length ? respNodes.map(estimateNodeSizeChars).reduce((a, b) => a + b, 0) : asString(it.response_text).length;
+  n += reqNodes.length ? reqNodes.map(estimateNodeSizeBytes).reduce((a, b) => a + b, 0) : utf8ByteLen(it.request_message);
+  n += respNodes.length ? respNodes.map(estimateNodeSizeBytes).reduce((a, b) => a + b, 0) : utf8ByteLen(it.response_text);
   return n;
 }
 
-function estimateHistorySizeChars(history) {
-  return asArray(history).map(estimateExchangeSizeChars).reduce((a, b) => a + b, 0);
+function estimateHistorySizeBytes(history) {
+  return asArray(history).map(estimateExchangeSizeBytes).reduce((a, b) => a + b, 0);
 }
 
 module.exports = {
   approxTokenCountFromByteLen,
-  estimateRequestExtraSizeChars,
-  estimateExchangeSizeChars,
-  estimateHistorySizeChars
+  estimateRequestExtraSizeBytes,
+  estimateExchangeSizeBytes,
+  estimateHistorySizeBytes
 };

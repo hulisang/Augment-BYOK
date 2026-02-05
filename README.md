@@ -252,14 +252,16 @@
 
 - [x] `historySummary.enabled`：默认 false（显式开启才生效）
 - [-] `historySummary.providerId/model`：可空（为空时会 fallback 到当前 provider/model）
-- [x] 触发阈值：`triggerOnHistorySizeChars`（默认 800000）
+- [x] 触发阈值：`triggerOnHistorySizeChars`（默认 800000；按 UTF-8 bytes 估算体积）
 - [x] 触发策略：`triggerStrategy=auto|ratio|chars`
 - [x] 比例阈值：`triggerOnContextRatio` / `targetContextRatio`
 - [x] 上下文窗口估算：`contextWindowTokensDefault` / `contextWindowTokensOverrides`（支持按 model 名子串匹配 override）
-- [x] Tail 保留：`historyTailSizeCharsToExclude` + `minTailExchanges`
-- [x] 摘要生成上限：`maxTokens` / `timeoutSeconds` / `maxSummarizationInputChars`
+- [x] Tail 保留：`historyTailSizeCharsToExclude`（按 UTF-8 bytes 估算）+ `minTailExchanges`
+- [x] 摘要生成上限：`maxTokens` / `timeoutSeconds` / `maxSummarizationInputChars`（按 UTF-8 bytes 估算）
 - [x] rolling summary 缓存：`rollingSummary=true` + `cacheTtlMs`（对话维度缓存，减少重复 summarization）
 - [x] 提供默认 supervisor prompt 模板：`summaryNodeRequestMessageTemplate` + `abridgedHistoryParams`
+- [x] 兜底：summary 生成失败/超时/未配置时，仍会注入 fallback summary 强制压缩（避免请求过大导致直接失败）
+- [x] 兜底：`end_part_full` 中的 `tool_result` / `tool_use input` 会中间截断（保留尾部引用 id），防止单个工具输出撑爆上下文
 
 ### 5) 端点覆盖（71 / 13）与路由策略
 
@@ -500,12 +502,14 @@
 - [x] 触发决策：支持 `chars` / `ratio` / `auto`（auto 会结合上下文窗口估算）
 - [x] 上下文窗口估算（inference）：按模型名启发式推断（如 `gpt-4o`→128k、`claude-*`→200k 等）
 - [x] 覆盖优先级：`contextWindowTokensOverrides`（按 model 子串最长匹配）> `contextWindowTokensDefault` > 推断值
-- [x] Tail 选择：保留末尾 `historyTailSizeCharsToExclude` 字符 + 至少 `minTailExchanges` 个 exchanges
+- [x] Tail 选择：保留末尾 `historyTailSizeCharsToExclude` bytes（UTF-8 估算）+ 至少 `minTailExchanges` 个 exchanges
 - [x] Abridged middle：按 `abridgedHistoryParams` 输出“中段摘要”，降低 token 成本
 - [x] Summary supervisor 模板：`summaryNodeRequestMessageTemplate` 支持 `{summary}/{end_part_full}` 等占位符
 - [-] rolling summary cache：对话维度缓存（当上游按轮数裁剪导致 summary exchange 消失时可补回早期上下文）
 - [-] Editable History 兼容：检测到 checkpoint 注入 user-modified changes 时，自动失效该对话的 summary cache
 - [x] 一键清缓存：`BYOK: Clear History Summary Cache`
+- [x] 兜底：summary 生成失败时仍会注入 fallback summary（保证压缩路径可用）
+- [x] 兜底：`end_part_full` 中的 `tool_result` / `tool_use input` 会做中间截断，避免上下文爆炸
 
 ### 13) Workspace/Upstream 数据补齐（assets/checkpoints/文件片段）
 

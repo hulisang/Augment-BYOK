@@ -4,7 +4,8 @@ const { traceAsyncGenerator } = require("../infra/trace");
 const { debug } = require("../infra/log");
 const { normalizeString } = require("../infra/util");
 const { formatKnownProviderTypes } = require("./provider-types");
-const { withMaxTokensRetry, readMaxTokensFromRequestDefaults, computeReducedMaxTokens, rewriteRequestDefaultsWithMaxTokens, isLikelyMaxTokensErrorMessage } = require("./token-budget/max-tokens-retry");
+const { applyEmergencyContextCompactionForRetry } = require("./augment-history-summary");
+const { readMaxTokensFromRequestDefaults, computeReducedMaxTokens, rewriteRequestDefaultsWithMaxTokens, isLikelyMaxTokensErrorMessage } = require("./token-budget/max-tokens-retry");
 const {
   buildSystemPrompt,
   convertOpenAiTools,
@@ -22,6 +23,8 @@ const { openAiResponsesCompleteText, openAiResponsesChatStreamChunks } = require
 const { anthropicCompleteText, anthropicChatStreamChunks } = require("../providers/anthropic");
 const { geminiCompleteText, geminiChatStreamChunks } = require("../providers/gemini");
 
+const CONTEXT_RETRY_DEFAULT_MAX_ATTEMPTS = 5; // original + 4 retries
+
 function convertToolDefinitionsByProviderType(type, toolDefs) {
   const t = normalizeString(type);
   if (t === "openai_compatible") return convertOpenAiTools(toolDefs);
@@ -29,6 +32,75 @@ function convertToolDefinitionsByProviderType(type, toolDefs) {
   if (t === "openai_responses") return convertOpenAiResponsesTools(toolDefs);
   if (t === "gemini_ai_studio") return convertGeminiTools(toolDefs);
   throw new Error(`未知 provider.type: ${t}（支持：${formatKnownProviderTypes()}）`);
+}
+
+function normalizeMaxAttempts(maxAttempts) {
+  const n = Number(maxAttempts);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return CONTEXT_RETRY_DEFAULT_MAX_ATTEMPTS;
+}
+
+function computeNextRequestDefaultsForRetry(requestDefaults, errorMessage) {
+  const rd = requestDefaults && typeof requestDefaults === "object" && !Array.isArray(requestDefaults) ? requestDefaults : {};
+  const cur = readMaxTokensFromRequestDefaults(rd);
+  const next = computeReducedMaxTokens({ currentMax: cur, errorMessage });
+  if (next == null) return { requestDefaults: rd, changed: false, cur, next: null };
+  return { requestDefaults: rewriteRequestDefaultsWithMaxTokens(rd, next), changed: true, cur, next };
+}
+
+function applyEmergencyContextCompactionForProviderRetry(req, { level, label, attempt, maxAttempts } = {}) {
+  const res = applyEmergencyContextCompactionForRetry(req, { level });
+  if (!res || typeof res !== "object" || res.changed !== true) return { changed: false };
+
+  if (res.kind === "summary") {
+    debug(
+      `[context-retry] ${normalizeString(label) || "llm"} attempt=${attempt}/${maxAttempts} shrink summary: end_part_full_max_chars=${Number(res.endPartFullMaxChars) || 0} history_end=${Number(res.historyEndBefore) || 0}->${Number(res.historyEndAfter) || 0} where=${normalizeString(res.where) || "unknown"}`
+    );
+  } else if (res.kind === "history") {
+    debug(
+      `[context-retry] ${normalizeString(label) || "llm"} attempt=${attempt}/${maxAttempts} shrink chat_history: ${Number(res.chatHistoryBefore) || 0}->${Number(res.chatHistoryAfter) || 0}`
+    );
+  } else {
+    debug(`[context-retry] ${normalizeString(label) || "llm"} attempt=${attempt}/${maxAttempts} shrink applied`);
+  }
+
+  return { changed: true, detail: res };
+}
+
+async function runWithContextRetry(callOnce, { requestDefaults, req, label, maxAttempts, abortSignal } = {}) {
+  const attempts = normalizeMaxAttempts(maxAttempts);
+  let rd = requestDefaults;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (abortSignal && abortSignal.aborted) throw new Error("Aborted");
+    try {
+      return await callOnce(rd);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const canRetry = attempt < attempts && isLikelyMaxTokensErrorMessage(msg);
+      if (!canRetry) throw err;
+
+      const { requestDefaults: nextRd, changed: maxTokensChanged, cur, next } = computeNextRequestDefaultsForRetry(rd, msg);
+      if (maxTokensChanged) {
+        debug(
+          `[max-tokens-retry] ${normalizeString(label) || "llm"} attempt=${attempt}/${attempts} reducing max_tokens: ${Number(cur) || 0} -> ${next}`
+        );
+        rd = nextRd;
+      }
+
+      const { changed: inputChanged } = applyEmergencyContextCompactionForProviderRetry(req, {
+        level: attempt,
+        label,
+        attempt,
+        maxAttempts: attempts
+      });
+
+      if (!maxTokensChanged && !inputChanged) throw err;
+    }
+  }
+
+  // unreachable
+  return await callOnce(rd);
 }
 
 async function completeAugmentChatTextByProviderType({
@@ -101,14 +173,7 @@ async function completeAugmentChatTextByProviderType({
     throw new Error(`未知 provider.type: ${t}（支持：${formatKnownProviderTypes()}）`);
   };
 
-  return await withMaxTokensRetry(
-    async (rd) => await callOnce(rd),
-    {
-      requestDefaults,
-      label: lab,
-      abortSignal
-    }
-  );
+  return await runWithContextRetry(async (rd) => await callOnce(rd), { requestDefaults, req, label: lab, abortSignal });
 }
 
 function normalizeTraceLabel(traceLabel) {
@@ -147,7 +212,7 @@ async function* streamAugmentChatChunksByProviderType({
   const label = tl ? `${tl} ${t || "unknown"}` : `${t || "unknown"}`;
   const lab = `stream/${t || "unknown"}`;
   let rd = requestDefaults;
-  const maxAttempts = 3;
+  const maxAttempts = CONTEXT_RETRY_DEFAULT_MAX_ATTEMPTS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (abortSignal && abortSignal.aborted) throw new Error("Aborted");
@@ -238,12 +303,20 @@ async function* streamAugmentChatChunksByProviderType({
       const canRetry = attempt < maxAttempts && isLikelyMaxTokensErrorMessage(msg);
       if (!canRetry) throw err;
 
-      const cur = readMaxTokensFromRequestDefaults(rd);
-      const next = computeReducedMaxTokens({ currentMax: cur, errorMessage: msg });
-      if (next == null) throw err;
+      const { requestDefaults: nextRd, changed: maxTokensChanged, cur, next } = computeNextRequestDefaultsForRetry(rd, msg);
+      if (maxTokensChanged) {
+        debug(`[max-tokens-retry] ${lab} attempt=${attempt}/${maxAttempts} reducing max_tokens: ${Number(cur) || 0} -> ${next}`);
+        rd = nextRd;
+      }
 
-      debug(`[max-tokens-retry] ${lab} attempt=${attempt}/${maxAttempts} reducing max_tokens: ${Number(cur) || 0} -> ${next}`);
-      rd = rewriteRequestDefaultsWithMaxTokens(rd, next);
+      const { changed: inputChanged } = applyEmergencyContextCompactionForProviderRetry(req, {
+        level: attempt,
+        label: lab,
+        attempt,
+        maxAttempts
+      });
+
+      if (!maxTokensChanged && !inputChanged) throw err;
     }
   }
 

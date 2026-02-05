@@ -1,7 +1,7 @@
 "use strict";
 
 const { debug, warn } = require("../../../infra/log");
-const { normalizeString } = require("../../../infra/util");
+const { normalizeString, utf8ByteLen } = require("../../../infra/util");
 const { captureAugmentToolDefinitions } = require("../../../config/state");
 const { resolveExtraSystemPrompt } = require("../../../config/prompts");
 const { maybeSummarizeAndCompactAugmentChatRequest, deleteHistorySummaryCache } = require("../../../core/augment-history-summary/auto");
@@ -16,7 +16,7 @@ const { deriveWorkspaceFileChunksFromRequest } = require("../../workspace/file-c
 const { providerLabel, providerRequestContext } = require("../common");
 const { MAX_TOKENS_ALIAS_KEYS, normalizePositiveInt, pickPositiveIntFromRecord } = require("../../../providers/request-defaults-util");
 const { inferContextWindowTokensFromModelName } = require("../../../core/token-budget/context-window");
-const { approxTokenCountFromByteLen, estimateRequestExtraSizeChars, estimateHistorySizeChars } = require("../../../core/augment-history-summary/auto/estimate");
+const { approxTokenCountFromByteLen, estimateRequestExtraSizeBytes, estimateHistorySizeBytes } = require("../../../core/augment-history-summary/auto/estimate");
 
 function hasConfiguredMaxTokens(requestDefaults) {
   const rd = requestDefaults && typeof requestDefaults === "object" && !Array.isArray(requestDefaults) ? requestDefaults : {};
@@ -41,10 +41,17 @@ function estimateAugmentChatRequestTokens(req) {
   const userGuide = typeof r.user_guidelines === "string" ? r.user_guidelines : String(r.user_guidelines ?? "");
   const workspaceGuide = typeof r.workspace_guidelines === "string" ? r.workspace_guidelines : String(r.workspace_guidelines ?? "");
 
-  const extraChars = estimateRequestExtraSizeChars(r);
-  const historyChars = estimateHistorySizeChars(history);
-  const totalChars = msg.length + byokSystem.length + agentMem.length + userGuide.length + workspaceGuide.length + extraChars + historyChars;
-  return approxTokenCountFromByteLen(totalChars);
+  const extraBytes = estimateRequestExtraSizeBytes(r);
+  const historyBytes = estimateHistorySizeBytes(history);
+  const totalBytes =
+    utf8ByteLen(msg) +
+    utf8ByteLen(byokSystem) +
+    utf8ByteLen(agentMem) +
+    utf8ByteLen(userGuide) +
+    utf8ByteLen(workspaceGuide) +
+    extraBytes +
+    historyBytes;
+  return approxTokenCountFromByteLen(totalBytes);
 }
 
 function inferAutoMaxOutputTokens({ model, req } = {}) {

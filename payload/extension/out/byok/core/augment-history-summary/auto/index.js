@@ -1,7 +1,7 @@
 "use strict";
 
 const { debug } = require("../../../infra/log");
-const { normalizeString } = require("../../../infra/util");
+const { normalizeString, utf8ByteLen } = require("../../../infra/util");
 const shared = require("../../augment-chat/shared");
 const { buildAbridgedHistoryText, exchangeRequestNodes, exchangeResponseNodes } = require("../abridged");
 const { REQUEST_NODE_HISTORY_SUMMARY } = require("../../augment-protocol");
@@ -15,7 +15,11 @@ const {
 } = require("../cache");
 const { runSummaryModelOnce } = require("../provider-dispatch");
 
-const { approxTokenCountFromByteLen, estimateRequestExtraSizeChars, estimateHistorySizeChars } = require("./estimate");
+const {
+  approxTokenCountFromByteLen,
+  estimateRequestExtraSizeBytes,
+  estimateHistorySizeBytes
+} = require("./estimate");
 const { resolveContextWindowTokens, resolveHistorySummaryConfig, pickProviderById } = require("./config");
 const { computeTailSelection } = require("./tail-selection");
 const {
@@ -69,18 +73,18 @@ function requestContainsSummary(req) {
   return hasHistorySummaryNode(nodes);
 }
 
-function computeTriggerDecision({ hs, requestedModel, totalWithExtra, convId }) {
-  const triggerOnHistorySizeChars = Number(hs.triggerOnHistorySizeChars);
-  const baseDecision = { kind: "chars", thresholdChars: triggerOnHistorySizeChars, tailExcludeChars: hs.historyTailSizeCharsToExclude };
+function computeTriggerDecision({ hs, requestedModel, totalWithExtraBytes, convId }) {
+  const triggerOnHistorySizeBytes = Number(hs.triggerOnHistorySizeChars);
+  const baseDecision = { kind: "size", thresholdChars: triggerOnHistorySizeBytes, tailExcludeChars: hs.historyTailSizeCharsToExclude };
   const strategy = normalizeString(hs.triggerStrategy).toLowerCase();
 
-  if (strategy === "chars") return totalWithExtra >= triggerOnHistorySizeChars ? baseDecision : null;
+  if (strategy === "chars") return totalWithExtraBytes >= triggerOnHistorySizeBytes ? baseDecision : null;
 
   const cwTokensRaw = resolveContextWindowTokens(hs, requestedModel);
   const cwTokens =
-    strategy === "auto" && cwTokensRaw ? Math.min(cwTokensRaw, Math.max(0, Math.floor(triggerOnHistorySizeChars / 4))) : cwTokensRaw;
+    strategy === "auto" && cwTokensRaw ? Math.min(cwTokensRaw, Math.max(0, Math.floor(triggerOnHistorySizeBytes / 4))) : cwTokensRaw;
   if ((strategy === "ratio" || strategy === "auto") && cwTokens) {
-    const approxTotalTokens = approxTokenCountFromByteLen(totalWithExtra);
+    const approxTotalTokens = approxTokenCountFromByteLen(totalWithExtraBytes);
     const ratio = cwTokens ? approxTotalTokens / cwTokens : 0;
     const triggerRatio = Number(hs.triggerOnContextRatio) || 0.7;
     if (ratio < triggerRatio) return null;
@@ -97,7 +101,13 @@ function computeTriggerDecision({ hs, requestedModel, totalWithExtra, convId }) 
     return { kind: "ratio", thresholdChars, tailExcludeChars };
   }
 
-  return totalWithExtra >= triggerOnHistorySizeChars ? baseDecision : null;
+  return totalWithExtraBytes >= triggerOnHistorySizeBytes ? baseDecision : null;
+}
+
+function buildFallbackSummaryText({ droppedHead, tail } = {}) {
+  const dropped = Array.isArray(droppedHead) ? droppedHead.length : 0;
+  const kept = Array.isArray(tail) ? tail.length : 0;
+  return `Context was compacted without an LLM summary (dropped_exchanges=${dropped} kept_exchanges=${kept}). Use the abridged and full tail history below.`;
 }
 
 async function resolveSummaryText({
@@ -151,9 +161,9 @@ async function resolveSummaryText({
     }
   }
 
-  const maxIn = Number(hs.maxSummarizationInputChars) || 0;
-  if (maxIn > 0) {
-    const shrink = () => estimateHistorySizeChars(inputHistory) > maxIn;
+  const maxInBytes = Number(hs.maxSummarizationInputChars) || 0;
+  if (maxInBytes > 0) {
+    const shrink = () => estimateHistorySizeBytes(inputHistory) > maxInBytes;
     if (usedRolling) while (inputHistory.length > 1 && shrink()) inputHistory.splice(1, 1);
     else while (inputHistory.length && shrink()) inputHistory.shift();
   }
@@ -224,42 +234,53 @@ async function maybeSummarizeAndCompactAugmentChatRequest({
   if (historyContainsSummary(history)) return false;
   if (requestContainsSummary(req)) return false;
 
-  const totalChars = estimateHistorySizeChars(history);
-  const totalWithExtra = totalChars + asString(req?.message).length + estimateRequestExtraSizeChars(req);
-  const decision = computeTriggerDecision({ hs, requestedModel, totalWithExtra, convId });
+  const msg = asString(req?.message);
+  const totalBytes = estimateHistorySizeBytes(history);
+  const totalWithExtraBytes = totalBytes + utf8ByteLen(msg) + estimateRequestExtraSizeBytes(req);
+  const decision = computeTriggerDecision({ hs, requestedModel, totalWithExtraBytes, convId });
 
   if (decision) {
     const sel = computeTailSelection({ history, hs, decision });
 
     if (sel && sel.droppedHead.length) {
       const abridged = buildAbridgedHistoryText(history, hs.abridgedHistoryParams, sel.boundaryRequestId);
-      const summary = await resolveSummaryText({
-        hs,
-        cfg,
-        convId,
-        boundaryRequestId: sel.boundaryRequestId,
-        history,
-        tailStart: sel.tailStart,
-        droppedHead: sel.droppedHead,
-        fallbackProvider,
-        fallbackModel,
-        timeoutMs,
-        abortSignal
-      });
-
-      if (summary) {
-        const injected = injectHistorySummaryNodeIntoRequestNodes({
+      const now = nowMs();
+      let summary = null;
+      try {
+        summary = await resolveSummaryText({
           hs,
-          req,
-          tail: sel.tail,
-          summaryText: summary.summaryText,
-          summarizationRequestId: summary.summarizationRequestId,
-          abridged
+          cfg,
+          convId,
+          boundaryRequestId: sel.boundaryRequestId,
+          history,
+          tailStart: sel.tailStart,
+          droppedHead: sel.droppedHead,
+          fallbackProvider,
+          fallbackModel,
+          timeoutMs,
+          abortSignal
         });
-        if (injected) {
-          debug(`historySummary injected: conv=${convId} before≈${totalChars} tailStart=${sel.tailStart}`);
-          return true;
-        }
+      } catch (err) {
+        debug(`historySummary summarization failed (fallback): conv=${convId} err=${err instanceof Error ? err.message : String(err)}`);
+        summary = null;
+      }
+
+      const summaryText = summary ? summary.summaryText : buildFallbackSummaryText({ droppedHead: sel.droppedHead, tail: sel.tail });
+      const summarizationRequestId = summary ? summary.summarizationRequestId : `byok_history_summary_fallback_${now}`;
+
+      const injected = injectHistorySummaryNodeIntoRequestNodes({
+        hs,
+        req,
+        tail: sel.tail,
+        summaryText,
+        summarizationRequestId,
+        abridged
+      });
+      if (injected) {
+        debug(
+          `historySummary injected: conv=${convId} kind=${summary ? "llm" : "fallback"} beforeBytes≈${totalBytes} tailStart=${sel.tailStart}`
+        );
+        return true;
       }
     }
   }
@@ -290,7 +311,7 @@ async function maybeSummarizeAndCompactAugmentChatRequest({
   });
   if (!injected2) return false;
 
-  debug(`historySummary injected from cache: conv=${convId} before≈${totalChars} tailStart=${Number(sel2?.tailStart) || 0}`);
+  debug(`historySummary injected from cache: conv=${convId} beforeBytes≈${totalBytes} tailStart=${Number(sel2?.tailStart) || 0}`);
   return true;
 }
 

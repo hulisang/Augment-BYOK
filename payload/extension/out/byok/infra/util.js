@@ -86,6 +86,15 @@ function parseByokModelId(modelId, opts) {
   return { providerId, modelId: innerModelId };
 }
 
+function utf8ByteLen(value) {
+  const s = typeof value === "string" ? value : String(value ?? "");
+  try {
+    // eslint-disable-next-line node/no-unsupported-features/node-builtins
+    if (typeof Buffer !== "undefined" && Buffer && typeof Buffer.byteLength === "function") return Buffer.byteLength(s, "utf8");
+  } catch {}
+  return s.length;
+}
+
 function safeTransform(transform, raw, label) {
   if (typeof transform !== "function") return raw;
   try {
@@ -132,6 +141,7 @@ module.exports = {
   normalizeEndpoint,
   normalizeRawToken,
   parseByokModelId,
+  utf8ByteLen,
   safeTransform,
   stripByokInternalKeys,
   emptyAsyncGenerator,
