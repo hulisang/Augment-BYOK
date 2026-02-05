@@ -145,8 +145,14 @@ BYOK chat 会尝试调用官方能力，把外部上下文注入到请求中（�
   - 422 `system: invalid type: string`：自动重试 `system=[{type:\"text\",text:\"...\"}]`（兼容部分 Anthropics 代理实现）
   - 若代理进一步要求 `messages[].content` 也必须是 blocks：自动重试 `messages[].content=[{type:\"text\",...}]`
   - 400/422：会最小化 `requestDefaults` 重试（保留 `max_tokens`）
+- OpenAI Compatible（Chat Completions）
+  - tools → functions → no-tools：按兼容链自动降级（不同网关对 `tools/tool_choice/stream_options` 支持不一致）
+  - 并行工具兜底：当请求侧未声明 `support_parallel_tool_use=true` 且存在 tools 时，自动注入 `parallel_tool_calls=false`（并兼容 `parallelToolCalls`）
+  - 多模态兜底：不支持 multipart 的网关会自动压平为纯文本（并提示省略非文本部分）
 - OpenAI Responses
   - 兼容 `max_tokens/maxTokens/maxOutputTokens` → `max_output_tokens`
+  - 并行工具兜底：同上（注入 `parallel_tool_calls=false`；并兼容 `parallelToolCalls`）
+  - `status=incomplete` + `incomplete_details.reason`：映射为 Augment `stop_reason`
   - 400/422：最小化 defaults 重试（仅保留 `max_output_tokens`）
 - Gemini AI Studio
   - 兼容 `max_tokens/maxTokens/max_output_tokens/maxOutputTokens` → `generationConfig.maxOutputTokens`
