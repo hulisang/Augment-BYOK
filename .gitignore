@@ -1,5 +1,5 @@
 .cache/
 dist/
 tmp/
-
+.cunzhi-memory/
 config.yaml
