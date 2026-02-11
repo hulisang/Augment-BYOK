@@ -20,7 +20,7 @@ function patchTasklistAddTasksErrors(filePath) {
   // Patch: if any tasks fail, append failure summary; if all fail, return isError=true with details.
   next = replaceOnceRegex(
     next,
-    /async handleBatchCreation\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{[\s\S]*?let\s+([A-Za-z_$][\w$]*)=\[\];for\(let[\s\S]*?let\s+([A-Za-z_$][\w$]*)=V0\.formatBulkUpdateResponse\(Qk\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\);return\{\.\.\.xr\(\4\),plan:\6\}\}/g,
+    /async handleBatchCreation\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{[\s\S]*?let\s+([A-Za-z_$][\w$]*)=\[\];for\(let[\s\S]*?let\s+([A-Za-z_$][\w$]*)=V0\.formatBulkUpdateResponse\(Zk\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\);return\{\.\.\.xr\(\4\),plan:\6\}\}/g,
     (m) => {
       const resultsVar = String(m[3] || "");
       const textVar = String(m[4] || "");
@@ -28,7 +28,7 @@ function patchTasklistAddTasksErrors(filePath) {
       const afterVar = String(m[6] || "");
       if (!resultsVar || !textVar || !beforeVar || !afterVar) throw new Error("tasklist add_tasks errors: capture missing");
 
-      const oldTail = `let ${textVar}=V0.formatBulkUpdateResponse(Qk(${beforeVar},${afterVar}));return{...xr(${textVar}),plan:${afterVar}}`;
+      const oldTail = `let ${textVar}=V0.formatBulkUpdateResponse(Zk(${beforeVar},${afterVar}));return{...xr(${textVar}),plan:${afterVar}}`;
       const insertion =
         `let __byok_failed=${resultsVar}.filter(t=>t&&t.success===!1);` +
         `if(__byok_failed.length){` +
@@ -40,7 +40,7 @@ function patchTasklistAddTasksErrors(filePath) {
         `${textVar}+=__byok_msg;` +
         `}`;
 
-      const newTail = `let ${textVar}=V0.formatBulkUpdateResponse(Qk(${beforeVar},${afterVar}));${insertion}return{...xr(${textVar}),plan:${afterVar}}`;
+      const newTail = `let ${textVar}=V0.formatBulkUpdateResponse(Zk(${beforeVar},${afterVar}));${insertion}return{...xr(${textVar}),plan:${afterVar}}`;
       if (!m[0].includes(oldTail)) throw new Error("tasklist add_tasks errors: tail not found (upstream may have changed)");
       return m[0].replace(oldTail, newTail);
     },
