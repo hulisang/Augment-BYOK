@@ -21,23 +21,15 @@ function patchExtensionClientContextAsset(filePath) {
   let out = original;
 
   // 兼容上游小版本变更：不强依赖整段变量名（N/F/aS/rS 等），只替换“把 payload C 存入 HISTORY_SUMMARY 节点”的那一小段。
-  // 目标：U={id:0,type:Ie.HISTORY_SUMMARY,history_summary_node:C} -> U={id:0,type:Ie.TEXT,text_node:{content:k3(C)}}
+  // 目标：k={id:0,type:ve.HISTORY_SUMMARY,history_summary_node:F} -> k={id:0,type:ve.TEXT,text_node:{content:U3(F)}}
   //
-  // NOTE: k3 是上游内部函数：把 summary payload 按 message_template 渲染为最终字符串。
-  const summaryNodeRe = /\{id:0,type:Ie\.HISTORY_SUMMARY,history_summary_node:([A-Za-z_$][0-9A-Za-z_$]*)\}/g;
-
-  // 上游可能已移除 HISTORY_SUMMARY 节点类型（2026-02 起确认），此时正则无匹配目标。
-  // 优雅跳过：不报错，仅 log 提示并返回 unchanged。
-  const matches = Array.from(out.matchAll(summaryNodeRe));
-  if (matches.length === 0) {
-    console.log("[patch] HISTORY_SUMMARY node not found in upstream, skipping (upstream已移除该节点类型)");
-    return { changed: false, reason: "upstream_removed" };
-  }
+  // NOTE: U3 是上游内部函数：把 summary payload 按 message_template 渲染为最终字符串。
+  const summaryNodeRe = /\{id:0,type:ve\.HISTORY_SUMMARY,history_summary_node:([A-Za-z_$][0-9A-Za-z_$]*)\}/g;
 
   out = replaceOnceRegex(
     out,
     summaryNodeRe,
-    (m) => `{id:0,type:Ie.TEXT,text_node:{content:k3(${m[1]})}}`,
+    (m) => `{id:0,type:ve.TEXT,text_node:{content:U3(${m[1]})}}`,
     "extension-client-context HISTORY_SUMMARY node slimming"
   );
 

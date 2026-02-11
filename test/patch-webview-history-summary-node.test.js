@@ -30,14 +30,14 @@ test("patchWebviewHistorySummaryNode: slims HISTORY_SUMMARY node (snake_case pro
     const assetsDir = path.join(extDir, "common-webviews", "assets");
     const filePath = path.join(assetsDir, "extension-client-context-test.js");
 
-    writeUtf8(filePath, "const X={id:0,type:Ie.HISTORY_SUMMARY,history_summary_node:C};\n");
+    writeUtf8(filePath, "const X={id:0,type:ve.HISTORY_SUMMARY,history_summary_node:C};\n");
 
     patchWebviewHistorySummaryNode(extDir);
 
     const out = readUtf8(filePath);
-    assert.ok(!out.includes("type:Ie.HISTORY_SUMMARY"), "HISTORY_SUMMARY node not removed");
-    assert.ok(out.includes("type:Ie.TEXT"), "TEXT node not injected");
-    assert.ok(out.includes("text_node:{content:k3(C)}"), "TEXT node did not reference k3(C)");
+    assert.ok(!out.includes("type:ve.HISTORY_SUMMARY"), "HISTORY_SUMMARY node not removed");
+    assert.ok(out.includes("type:ve.TEXT"), "TEXT node not injected");
+    assert.ok(out.includes("text_node:{content:U3(C)}"), "TEXT node did not reference U3(C)");
     assert.ok(out.includes("__augment_byok_webview_history_summary_node_slim_v1"), "marker missing");
   });
 });
