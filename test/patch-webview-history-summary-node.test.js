@@ -35,8 +35,8 @@ test("patchWebviewHistorySummaryNode: slims HISTORY_SUMMARY node (snake_case pro
     patchWebviewHistorySummaryNode(extDir);
 
     const out = readUtf8(filePath);
-    assert.ok(!out.includes("type:ve.HISTORY_SUMMARY"), "HISTORY_SUMMARY node not removed");
-    assert.ok(out.includes("type:ve.TEXT"), "TEXT node not injected");
+    assert.ok(!out.includes("HISTORY_SUMMARY"), "HISTORY_SUMMARY node not removed");
+    assert.ok(out.includes("type:ve.TEXT"), "TEXT node not injected (should preserve enum prefix)");
     assert.ok(out.includes("text_node:{content:U3(C)}"), "TEXT node did not reference U3(C)");
     assert.ok(out.includes("__augment_byok_webview_history_summary_node_slim_v1"), "marker missing");
   });

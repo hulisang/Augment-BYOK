@@ -21,15 +21,16 @@ function patchExtensionClientContextAsset(filePath) {
   let out = original;
 
   // 兼容上游小版本变更：不强依赖整段变量名（N/F/aS/rS 等），只替换“把 payload C 存入 HISTORY_SUMMARY 节点”的那一小段。
-  // 目标：k={id:0,type:ve.HISTORY_SUMMARY,history_summary_node:F} -> k={id:0,type:ve.TEXT,text_node:{content:U3(F)}}
+  // 目标：k={id:0,type:XX.HISTORY_SUMMARY,history_summary_node:F} -> k={id:0,type:XX.TEXT,text_node:{content:U3(F)}}
+  //   其中 XX 为上游 minified 枚举前缀（历史上为 ve / Ie 等，不固定）。
   //
   // NOTE: U3 是上游内部函数：把 summary payload 按 message_template 渲染为最终字符串。
-  const summaryNodeRe = /\{id:0,type:ve\.HISTORY_SUMMARY,history_summary_node:([A-Za-z_$][0-9A-Za-z_$]*)\}/g;
+  const summaryNodeRe = /\{id:0,type:(\w+)\.HISTORY_SUMMARY,history_summary_node:([A-Za-z_$][0-9A-Za-z_$]*)\}/g;
 
   out = replaceOnceRegex(
     out,
     summaryNodeRe,
-    (m) => `{id:0,type:ve.TEXT,text_node:{content:U3(${m[1]})}}`,
+    (m) => `{id:0,type:${m[1]}.TEXT,text_node:{content:U3(${m[2]})}}`,
     "extension-client-context HISTORY_SUMMARY node slimming"
   );
 
