@@ -3,6 +3,11 @@
 const { assert, ok, escapeRegExp } = require("./util");
 const { findAsyncMethodParams } = require("./js-parse");
 
+// patch-callapi-shim.js injects a minifier-robust upstreamApiToken expression using arguments[...] indexes:
+// arguments[10] ?? ((arguments[1]||{}).apiToken)
+const INJECTED_UPSTREAM_API_TOKEN_COALESCE_RE =
+  /arguments\s*\[\s*10\s*\]\s*(?:\?\?|\|\|)\s*\(\s*\(\s*arguments\s*\[\s*1\s*\]\s*\|\|\s*\{\s*\}\s*\)\s*\.apiToken\s*\)/;
+
 function assertCallApiShimSignatureContracts(extJs) {
   const ident = (name) => `(?<![\\w$])${escapeRegExp(name)}(?![\\w$])`;
   const callApiNeedle = 'require("./byok/runtime/shim/call-api").maybeHandleCallApi';
@@ -36,9 +41,12 @@ function assertCallApiShimSignatureContracts(extJs) {
     new RegExp(`${ident(apiTokenVar)}\\s*=\\s*await\\s+this\\.clientAuth\\.getAPIToken\\s*\\(`).test(callApiWindow),
     `callApi contract: expected ${apiTokenVar}=await this.clientAuth.getAPIToken(...) within method body`
   );
+  const apiTokenCoalesceOk =
+    new RegExp(`${ident(apiTokenVar)}\\s*(?:\\?\\?|\\|\\|)\\s*${ident(cfgVar)}\\.apiToken(?![\\w$])`).test(callApiWindow) ||
+    INJECTED_UPSTREAM_API_TOKEN_COALESCE_RE.test(callApiWindow);
   assert(
-    new RegExp(`${ident(apiTokenVar)}\\s*(?:\\?\\?|\\|\\|)\\s*${ident(cfgVar)}\\.apiToken(?![\\w$])`).test(callApiWindow),
-    `callApi contract: expected ${apiTokenVar}??${cfgVar}.apiToken (or ||) within method body`
+    apiTokenCoalesceOk,
+    `callApi contract: expected ${apiTokenVar}??${cfgVar}.apiToken (or injected arguments[10]??((arguments[1]||{}).apiToken)) within method body`
   );
   assert(
     new RegExp(
