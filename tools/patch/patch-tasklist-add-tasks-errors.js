@@ -18,17 +18,34 @@ function patchTasklistAddTasksErrors(filePath) {
   // Upstream add_tasks swallows per-task creation errors inside handleBatchCreation and returns
   // "Created: 0, Updated: 0, Deleted: 0" with no error details.
   // Patch: if any tasks fail, append failure summary; if all fail, return isError=true with details.
+  //
+  // 上游 minified 变量名不固定（历史上 Zk→Qk、V0/xr 等），因此正则中所有工具函数名
+  // 均用 (\w+) 动态捕获，避免每次上游重新打包都需要更新。
+  //
+  // 捕获组编号：
+  //   m[1] = handleBatchCreation 参数1
+  //   m[2] = handleBatchCreation 参数2
+  //   m[3] = results 数组变量名（如 s）
+  //   m[4] = text 变量名（如 c）
+  //   m[5] = formatBulkUpdateResponse 所属命名空间（如 V0）
+  //   m[6] = diff 函数名（如 Qk/Zk）
+  //   m[7] = before 变量名（如 o）
+  //   m[8] = after 变量名（如 a）
+  //   m[9] = spread helper 函数名（如 xr）
   next = replaceOnceRegex(
     next,
-    /async handleBatchCreation\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{[\s\S]*?let\s+([A-Za-z_$][\w$]*)=\[\];for\(let[\s\S]*?let\s+([A-Za-z_$][\w$]*)=V0\.formatBulkUpdateResponse\(Zk\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\);return\{\.\.\.xr\(\4\),plan:\6\}\}/g,
+    /async handleBatchCreation\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{[\s\S]*?let\s+([A-Za-z_$][\w$]*)=\[\];for\(let[\s\S]*?let\s+([A-Za-z_$][\w$]*)=(\w+)\.formatBulkUpdateResponse\((\w+)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\);return\{\.\.\.(\w+)\(\4\),plan:\8\}\}/g,
     (m) => {
       const resultsVar = String(m[3] || "");
       const textVar = String(m[4] || "");
-      const beforeVar = String(m[5] || "");
-      const afterVar = String(m[6] || "");
-      if (!resultsVar || !textVar || !beforeVar || !afterVar) throw new Error("tasklist add_tasks errors: capture missing");
+      const fmtNs = String(m[5] || "");
+      const diffFn = String(m[6] || "");
+      const beforeVar = String(m[7] || "");
+      const afterVar = String(m[8] || "");
+      const spreadFn = String(m[9] || "");
+      if (!resultsVar || !textVar || !fmtNs || !diffFn || !beforeVar || !afterVar || !spreadFn) throw new Error("tasklist add_tasks errors: capture missing");
 
-      const oldTail = `let ${textVar}=V0.formatBulkUpdateResponse(Zk(${beforeVar},${afterVar}));return{...xr(${textVar}),plan:${afterVar}}`;
+      const oldTail = `let ${textVar}=${fmtNs}.formatBulkUpdateResponse(${diffFn}(${beforeVar},${afterVar}));return{...${spreadFn}(${textVar}),plan:${afterVar}}`;
       const insertion =
         `let __byok_failed=${resultsVar}.filter(t=>t&&t.success===!1);` +
         `if(__byok_failed.length){` +
@@ -40,7 +57,7 @@ function patchTasklistAddTasksErrors(filePath) {
         `${textVar}+=__byok_msg;` +
         `}`;
 
-      const newTail = `let ${textVar}=V0.formatBulkUpdateResponse(Zk(${beforeVar},${afterVar}));${insertion}return{...xr(${textVar}),plan:${afterVar}}`;
+      const newTail = `let ${textVar}=${fmtNs}.formatBulkUpdateResponse(${diffFn}(${beforeVar},${afterVar}));${insertion}return{...${spreadFn}(${textVar}),plan:${afterVar}}`;
       if (!m[0].includes(oldTail)) throw new Error("tasklist add_tasks errors: tail not found (upstream may have changed)");
       return m[0].replace(oldTail, newTail);
     },
