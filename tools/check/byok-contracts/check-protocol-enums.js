@@ -5,16 +5,7 @@ const path = require("path");
 
 const { fail, assert, ok, readText } = require("./util");
 
-function findAssetFile(assetsDir, fileRe, { mustContain } = {}) {
-  const files = fs.readdirSync(assetsDir).filter((f) => fileRe.test(f)).sort();
-  for (const f of files) {
-    const p = path.join(assetsDir, f);
-    if (!mustContain) return p;
-    const txt = readText(p);
-    if (txt.includes(mustContain)) return p;
-  }
-  return null;
-}
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
 function listAssetCandidates(assetsDir, fileRe, { max = 20 } = {}) {
   try {
@@ -34,8 +25,38 @@ function parseNumericEnumPairs(minifiedJs) {
   return out;
 }
 
+function findEnumsAsset(assetsDir, { fileRes, mustContain, requiredKeys, label } = {}) {
+  const patterns = Array.isArray(fileRes) && fileRes.length ? fileRes : [/^.*\.js$/];
+  const required = Array.isArray(requiredKeys) ? requiredKeys.filter(Boolean) : [];
+  const contains = typeof mustContain === "string" && mustContain.length ? mustContain : "";
+  const lbl = String(label || "asset");
+
+  for (const fileRe of patterns) {
+    let files = [];
+    try {
+      files = fs.readdirSync(assetsDir).filter((f) => fileRe.test(f)).sort();
+    } catch (err) {
+      fail(`${lbl}: failed to read assets dir: ${String(err)}`);
+    }
+    for (const f of files) {
+      const p = path.join(assetsDir, f);
+      const txt = readText(p);
+      if (contains && !txt.includes(contains)) continue;
+      const enums = parseNumericEnumPairs(txt);
+      if (required.length && !required.every((k) => hasOwn(enums, k))) continue;
+      return { path: p, enums };
+    }
+  }
+  return null;
+}
+
+function formatCandidates(assetsDir, fileRe) {
+  const cands = listAssetCandidates(assetsDir, fileRe);
+  return cands.join(",") || "(none)";
+}
+
 function assertUpstreamEnumEq(label, upstreamMap, key, expected) {
-  assert(Object.prototype.hasOwnProperty.call(upstreamMap, key), `${label} missing key: ${key}`);
+  assert(hasOwn(upstreamMap, key), `${label} missing key: ${key}`);
   assert(upstreamMap[key] === expected, `${label} mismatch ${key}: upstream=${upstreamMap[key]} expected=${expected}`);
 }
 
@@ -43,12 +64,20 @@ function assertProtocolEnumsAligned(extensionDir, augmentProtocol, augmentChatSh
   const assetsDir = path.join(extensionDir, "common-webviews", "assets");
   assert(fs.existsSync(assetsDir), `assets dir not found: ${assetsDir}`);
 
-  const brokerPath = findAssetFile(assetsDir, /^message-broker-.*\.js$/, { mustContain: "HISTORY_SUMMARY" });
-  if (!brokerPath) {
-    const cands = listAssetCandidates(assetsDir, /^message-broker-.*\.js$/);
-    fail(`failed to locate message-broker-*.js in upstream assets (need "HISTORY_SUMMARY"); candidates=${cands.join(",") || "(none)"}`);
+  const brokerRes = findEnumsAsset(assetsDir, {
+    label: "protocol-enums",
+    fileRes: [/^message-broker-.*\.js$/, /^extension-client-context-.*\.js$/, /^.*\.js$/],
+    mustContain: "HISTORY_SUMMARY",
+    requiredKeys: ["TEXT", "HISTORY_SUMMARY"]
+  });
+  if (!brokerRes) {
+    const brokerCands = formatCandidates(assetsDir, /^message-broker-.*\.js$/);
+    const ctxCands = formatCandidates(assetsDir, /^extension-client-context-.*\.js$/);
+    fail(
+      `failed to locate a protocol-enum JS asset (need "HISTORY_SUMMARY"); candidates(message-broker)=${brokerCands} candidates(extension-client-context)=${ctxCands}`
+    );
   }
-  const brokerEnums = parseNumericEnumPairs(readText(brokerPath));
+  const brokerEnums = brokerRes.enums;
 
   const requestNodeExpected = {
     TEXT: augmentProtocol.REQUEST_NODE_TEXT,
@@ -58,11 +87,15 @@ function assertProtocolEnumsAligned(extensionDir, augmentProtocol, augmentChatSh
     IDE_STATE: augmentProtocol.REQUEST_NODE_IDE_STATE,
     EDIT_EVENTS: augmentProtocol.REQUEST_NODE_EDIT_EVENTS,
     CHECKPOINT_REF: augmentProtocol.REQUEST_NODE_CHECKPOINT_REF,
-    CHANGE_PERSONALITY: augmentProtocol.REQUEST_NODE_CHANGE_PERSONALITY,
     FILE: augmentProtocol.REQUEST_NODE_FILE,
     FILE_ID: augmentProtocol.REQUEST_NODE_FILE_ID,
     HISTORY_SUMMARY: augmentProtocol.REQUEST_NODE_HISTORY_SUMMARY
   };
+  // Upstream no longer emits CHANGE_PERSONALITY (enum key removed from webview bundle),
+  // but keep it optional for older upstream builds.
+  if (hasOwn(brokerEnums, "CHANGE_PERSONALITY")) {
+    requestNodeExpected.CHANGE_PERSONALITY = augmentProtocol.REQUEST_NODE_CHANGE_PERSONALITY;
+  }
   for (const [k, v] of Object.entries(requestNodeExpected)) assertUpstreamEnumEq("request_node_type", brokerEnums, k, v);
 
   const responseNodeExpected = {
@@ -92,7 +125,11 @@ function assertProtocolEnumsAligned(extensionDir, augmentProtocol, augmentChatSh
     BRAINSTORM: augmentProtocol.PERSONA_BRAINSTORM,
     REVIEWER: augmentProtocol.PERSONA_REVIEWER
   };
-  for (const [k, v] of Object.entries(personaExpected)) assertUpstreamEnumEq("persona_type", brokerEnums, k, v);
+  const upstreamHasPersona =
+    hasOwn(brokerEnums, "PROTOTYPER") && hasOwn(brokerEnums, "BRAINSTORM") && hasOwn(brokerEnums, "REVIEWER");
+  if (upstreamHasPersona) {
+    for (const [k, v] of Object.entries(personaExpected)) assertUpstreamEnumEq("persona_type", brokerEnums, k, v);
+  }
 
   const toolResultContentTypeExpected = {
     CONTENT_TEXT: augmentProtocol.TOOL_RESULT_CONTENT_TEXT,
@@ -100,12 +137,23 @@ function assertProtocolEnumsAligned(extensionDir, augmentProtocol, augmentChatSh
   };
   for (const [k, v] of Object.entries(toolResultContentTypeExpected)) assertUpstreamEnumEq("tool_result_content_type", brokerEnums, k, v);
 
-  const typesPath = findAssetFile(assetsDir, /^types-.*\.js$/, { mustContain: "MALFORMED_FUNCTION_CALL" });
-  if (!typesPath) {
-    const cands = listAssetCandidates(assetsDir, /^types-.*\.js$/);
-    fail(`failed to locate types-*.js in upstream assets (need "MALFORMED_FUNCTION_CALL"); candidates=${cands.join(",") || "(none)"}`);
+  let stopEnums = brokerEnums;
+  if (!hasOwn(stopEnums, "MALFORMED_FUNCTION_CALL")) {
+    const stopRes = findEnumsAsset(assetsDir, {
+      label: "stop-reason-enums",
+      fileRes: [/^types-.*\.js$/, /^extension-client-context-.*\.js$/, /^.*\.js$/],
+      mustContain: "MALFORMED_FUNCTION_CALL",
+      requiredKeys: ["MALFORMED_FUNCTION_CALL"]
+    });
+    if (!stopRes) {
+      const typesCands = formatCandidates(assetsDir, /^types-.*\.js$/);
+      const ctxCands = formatCandidates(assetsDir, /^extension-client-context-.*\.js$/);
+      fail(
+        `failed to locate stop-reason enum JS asset (need "MALFORMED_FUNCTION_CALL"); candidates(types-*)=${typesCands} candidates(extension-client-context)=${ctxCands}`
+      );
+    }
+    stopEnums = stopRes.enums;
   }
-  const stopEnums = parseNumericEnumPairs(readText(typesPath));
 
   const stopExpected = {
     REASON_UNSPECIFIED: augmentProtocol.STOP_REASON_UNSPECIFIED,
@@ -125,9 +173,13 @@ function assertProtocolEnumsAligned(extensionDir, augmentProtocol, augmentChatSh
   assert(augmentChatShared.mapImageFormatToMimeType(imageFormatExpected.WEBP) === "image/webp", "mapImageFormatToMimeType(WEBP) mismatch");
 
   assert(typeof augmentNodeFormat?.personaTypeToLabel === "function", "augment-node-format.personaTypeToLabel missing");
-  assert(augmentNodeFormat.personaTypeToLabel(personaExpected.PROTOTYPER) === "PROTOTYPER", "personaTypeToLabel(PROTOTYPER) mismatch");
-  assert(augmentNodeFormat.personaTypeToLabel(personaExpected.BRAINSTORM) === "BRAINSTORM", "personaTypeToLabel(BRAINSTORM) mismatch");
-  assert(augmentNodeFormat.personaTypeToLabel(personaExpected.REVIEWER) === "REVIEWER", "personaTypeToLabel(REVIEWER) mismatch");
+  if (upstreamHasPersona) {
+    assert(augmentNodeFormat.personaTypeToLabel(personaExpected.PROTOTYPER) === "PROTOTYPER", "personaTypeToLabel(PROTOTYPER) mismatch");
+    assert(augmentNodeFormat.personaTypeToLabel(personaExpected.BRAINSTORM) === "BRAINSTORM", "personaTypeToLabel(BRAINSTORM) mismatch");
+    assert(augmentNodeFormat.personaTypeToLabel(personaExpected.REVIEWER) === "REVIEWER", "personaTypeToLabel(REVIEWER) mismatch");
+  } else {
+    assert(augmentNodeFormat.personaTypeToLabel(0) === "DEFAULT", "personaTypeToLabel(DEFAULT) mismatch");
+  }
 
   ok("protocol enums aligned with upstream assets");
 }
