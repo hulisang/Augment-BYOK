@@ -34,7 +34,9 @@ function main() {
     const okApi = expectedApi ? callApi > 0 : callApi === 0;
     const okStream = expectedStream ? callApiStream > 0 : callApiStream === 0;
 
-    if (!d) errors.push(`missing endpoint in upstream: ${spec.endpoint}`);
+    if (spec.upstreamRemoved) {
+      // 上游已移除的端点不做存在性校验（BYOK shim 保留向后兼容）
+    } else if (!d) errors.push(`missing endpoint in upstream: ${spec.endpoint}`);
     else if (!okApi || !okStream) {
       errors.push(`endpoint kind mismatch: ${spec.endpoint} expected=${spec.kind} got(callApi=${callApi}, callApiStream=${callApiStream})`);
     }

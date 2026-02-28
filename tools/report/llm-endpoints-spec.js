@@ -1,6 +1,6 @@
 "use strict";
 
-// 单一真相：LLM 端点集合（13）+ 输入/输出形状摘要 + 上游期望 Back 类型
+// 单一真相：LLM 端点集合（13，含 2 个 upstreamRemoved）+ 输入/输出形状摘要 + 上游期望 Back 类型
 // - 用于生成覆盖矩阵报告（markdown）
 // - 用于 CI fail-fast：上游若移除/新增/改变调用类型（callApi vs callApiStream）会直接失败
 
@@ -46,6 +46,7 @@ const LLM_ENDPOINT_SPECS = [
     kind: "callApi",
     meaning: "代码编辑/改写（输出文本或结构化编辑结果）",
     upstreamBackType: "BackCodeEditResult",
+    upstreamRemoved: true, // 上游 0.801.0 移除（改用 resolve-edit 模式），BYOK shim 保留向后兼容
     inputKeys: ["model", "instruction", "prefix?", "selected_text", "suffix?", "path?", "lang?", "blob_name?", "prefix_begin?", "suffix_end?", "blobs?", "sequence_id?"],
     outputKeys: ["text", "unknown_blob_names[]", "checkpoint_not_found"],
     byokImpl: "edit instruction -> provider.completeText -> BackCodeEditResult(text)"
@@ -118,6 +119,7 @@ const LLM_ENDPOINT_SPECS = [
     kind: "callApiStream",
     meaning: "会话标题（stream）",
     upstreamBackType: "BackChatResult (stream chunks)",
+    upstreamRemoved: true, // 上游 0.801.0 移除，BYOK shim 保留向后兼容
     inputKeys: ["chat_history", "conversation_id?", "model", "mode?", "nodes?(empty)"],
     outputKeys: ["text (title delta)", "unknown_blob_names[]", "checkpoint_not_found", "workspace_file_chunks[]", "nodes[] (first chunk only)"],
     byokImpl: "title stream -> BackChatResult"
