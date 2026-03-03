@@ -32,6 +32,20 @@ function resolveToolSchema(def) {
   return { type: "object", properties: {} };
 }
 
+// OpenAI strict mode 不支持的 JSON Schema 关键字黑名单。
+// 这些关键字会导致 API 返回 400 invalid_function_parameters 错误。
+// 参考: https://platform.openai.com/docs/guides/structured-outputs#supported-schemas
+const OPENAI_STRICT_UNSUPPORTED_KEYWORDS = new Set([
+  "propertyNames", "patternProperties", "unevaluatedProperties", "unevaluatedItems",
+  "dependencies", "dependentRequired", "dependentSchemas",
+  "if", "then", "else",
+  "minProperties", "maxProperties",
+  "contains", "minContains", "maxContains",
+  "contentMediaType", "contentEncoding", "contentSchema",
+  "$comment", "examples", "deprecated", "readOnly", "writeOnly",
+  "$id", "$schema", "$anchor", "$vocabulary", "$dynamicAnchor", "$dynamicRef"
+]);
+
 function coerceOpenAiStrictJsonSchema(schema, depth) {
   const d = Number.isFinite(Number(depth)) ? Number(depth) : 0;
   if (d > 50) return schema;
@@ -39,6 +53,9 @@ function coerceOpenAiStrictJsonSchema(schema, depth) {
   if (!schema || typeof schema !== "object") return schema;
 
   const out = { ...schema };
+
+  // 剥离 OpenAI strict mode 不支持的关键字
+  for (const k of OPENAI_STRICT_UNSUPPORTED_KEYWORDS) delete out[k];
 
   const t = out.type;
   const hasObjectType = t === "object" || (Array.isArray(t) && t.some((x) => normalizeString(x).toLowerCase() === "object"));
