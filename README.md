@@ -432,7 +432,7 @@
 - [x] chat-stream：解析 responses SSE 并输出 Augment chunks（RAW_RESPONSE/THINKING/TOOL_USE/TOKEN_USAGE/final）
 - [x] `status=incomplete` + `incomplete_details.reason`：映射为 Augment stop_reason（`max_output_tokens`→MAX_TOKENS；`content_filter`→SAFETY；其余→UNSPECIFIED）
 - [x] 结束兜底：`response.completed`/final JSON 到来时补齐未完整输出的尾部文本（兼容部分网关缺失 done 事件）
-- [x] 工具 schema 严格化：补齐 `additionalProperties=false`；`required` 若缺省则兜底为全 required，若已提供则保留原值（Responses 对 schema 更严格）
+- [x] 工具 schema 严格化：补齐 `additionalProperties=false`；保留原 schema 的 `required`，仅过滤掉不存在于 `properties` 的键；剥离 OpenAI strict mode 不支持的关键字（避免把可选参数误升为必填）
 
 #### 8.4 `anthropic`（Anthropic Messages API 兼容）
 
