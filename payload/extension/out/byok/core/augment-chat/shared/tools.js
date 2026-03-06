@@ -27,7 +27,7 @@ function resolveToolSchema(def) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-    } catch {}
+    } catch { }
   }
   return { type: "object", properties: {} };
 }
@@ -82,9 +82,28 @@ function coerceOpenAiStrictJsonSchema(schema, depth) {
   if (out.prefixItems != null) out.prefixItems = coerceOpenAiStrictJsonSchema(out.prefixItems, d + 1);
   if (out.additionalProperties != null && out.additionalProperties !== false) out.additionalProperties = false;
 
+  // OpenAI strict mode 只支持 anyOf，不支持 oneOf / allOf。
+  // oneOf → anyOf（语义几乎等价：恰好匹配一个 vs 至少匹配一个，大模型场景差异可忽略）。
+  // allOf → 尝试合并为单个 schema；无法合并时退化为 anyOf。
+  if (Array.isArray(out.oneOf)) {
+    out.anyOf = (out.anyOf || []).concat(out.oneOf);
+    delete out.oneOf;
+  }
+  if (Array.isArray(out.allOf)) {
+    // allOf 只有一个元素时直接展开合并到当前层级
+    if (out.allOf.length === 1 && typeof out.allOf[0] === "object" && !Array.isArray(out.allOf[0])) {
+      const merged = out.allOf[0];
+      delete out.allOf;
+      for (const mk of Object.keys(merged)) {
+        if (!(mk in out)) out[mk] = merged[mk];
+      }
+    } else {
+      // 多元素 allOf 无法安全合并，退化为 anyOf（丢失 "全部匹配" 语义，但不会 400）
+      out.anyOf = (out.anyOf || []).concat(out.allOf);
+      delete out.allOf;
+    }
+  }
   if (Array.isArray(out.anyOf)) out.anyOf = out.anyOf.map((x) => coerceOpenAiStrictJsonSchema(x, d + 1));
-  if (Array.isArray(out.oneOf)) out.oneOf = out.oneOf.map((x) => coerceOpenAiStrictJsonSchema(x, d + 1));
-  if (Array.isArray(out.allOf)) out.allOf = out.allOf.map((x) => coerceOpenAiStrictJsonSchema(x, d + 1));
   if (out.not != null) out.not = coerceOpenAiStrictJsonSchema(out.not, d + 1);
 
   if (out.$defs && typeof out.$defs === "object" && !Array.isArray(out.$defs)) {
