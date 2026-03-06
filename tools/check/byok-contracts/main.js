@@ -109,6 +109,7 @@ function main(argv = process.argv) {
     "out/byok/ui/config-panel/webview/render/providers.js",
     "out/byok/ui/config-panel/webview/render/endpoints.js",
     "out/byok/ui/config-panel/webview/render/app.js",
+    "out/byok/ui/config-panel/webview/render/history-summary.js",
     "out/byok/ui/config-panel/webview/dom.js",
     "out/byok/ui/config-panel/webview/core.js",
     "out/byok/ui/config-panel/webview/handlers.js",
