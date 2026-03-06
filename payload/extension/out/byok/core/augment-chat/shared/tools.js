@@ -32,8 +32,9 @@ function resolveToolSchema(def) {
   return { type: "object", properties: {} };
 }
 
-// OpenAI strict mode 不支持的 JSON Schema 关键字黑名单。
-// 这些关键字会导致 API 返回 400 invalid_function_parameters 错误。
+// OpenAI Responses / tool transport schema 不兼容的 JSON Schema 关键字黑名单。
+// 这些关键字在部分网关或上游实现下可能导致工具 schema 被拒绝或行为不一致，
+// 因此在 provider 转换前统一做 transport sanitize。
 // 参考: https://platform.openai.com/docs/guides/structured-outputs#supported-schemas
 const OPENAI_STRICT_UNSUPPORTED_KEYWORDS = new Set([
   "propertyNames", "patternProperties", "unevaluatedProperties", "unevaluatedItems",
@@ -46,15 +47,13 @@ const OPENAI_STRICT_UNSUPPORTED_KEYWORDS = new Set([
   "$id", "$schema", "$anchor", "$vocabulary", "$dynamicAnchor", "$dynamicRef"
 ]);
 
-function coerceOpenAiStrictJsonSchema(schema, depth) {
+function sanitizeJsonSchemaForTransport(schema, depth) {
   const d = Number.isFinite(Number(depth)) ? Number(depth) : 0;
   if (d > 50) return schema;
-  if (Array.isArray(schema)) return schema.map((x) => coerceOpenAiStrictJsonSchema(x, d + 1));
+  if (Array.isArray(schema)) return schema.map((x) => sanitizeJsonSchemaForTransport(x, d + 1));
   if (!schema || typeof schema !== "object") return schema;
 
   const out = { ...schema };
-
-  // 剥离 OpenAI strict mode 不支持的关键字
   for (const k of OPENAI_STRICT_UNSUPPORTED_KEYWORDS) delete out[k];
 
   const t = out.type;
@@ -62,80 +61,67 @@ function coerceOpenAiStrictJsonSchema(schema, depth) {
   const hasProps = out.properties && typeof out.properties === "object" && !Array.isArray(out.properties);
   if (hasObjectType || hasProps) {
     if (!hasObjectType) out.type = "object";
-    if (!hasProps) out.properties = {};
-    out.additionalProperties = false;
-    const props = out.properties && typeof out.properties === "object" && !Array.isArray(out.properties) ? out.properties : {};
-    out.properties = props;
-    // 保留原始 required，只过滤掉不存在于 properties 的键；
-    // 若原 schema 未提供 required，则保持为空数组，避免把可选参数误升为必填。
-    const rawRequired = Array.isArray(out.required) ? out.required : [];
-    out.required = rawRequired.filter((k) => Object.prototype.hasOwnProperty.call(props, k));
-  }
-
-  if (out.properties && typeof out.properties === "object" && !Array.isArray(out.properties)) {
-    const props = out.properties;
+    const props = hasProps ? out.properties : {};
     const next = {};
-    for (const k of Object.keys(props)) next[k] = coerceOpenAiStrictJsonSchema(props[k], d + 1);
+    for (const k of Object.keys(props)) next[k] = sanitizeJsonSchemaForTransport(props[k], d + 1);
     out.properties = next;
+    if (out.additionalProperties != null && out.additionalProperties !== false) out.additionalProperties = false;
   }
 
-  if (out.items != null) out.items = coerceOpenAiStrictJsonSchema(out.items, d + 1);
-  if (out.prefixItems != null) out.prefixItems = coerceOpenAiStrictJsonSchema(out.prefixItems, d + 1);
-  if (out.additionalProperties != null && out.additionalProperties !== false) out.additionalProperties = false;
-
-  // OpenAI strict mode 只支持 anyOf，不支持 oneOf / allOf。
-  // oneOf → anyOf（语义几乎等价：恰好匹配一个 vs 至少匹配一个，大模型场景差异可忽略）。
-  // allOf → 尝试合并为单个 schema；无法合并时退化为 anyOf。
+  if (out.items != null) out.items = sanitizeJsonSchemaForTransport(out.items, d + 1);
+  if (out.prefixItems != null) out.prefixItems = sanitizeJsonSchemaForTransport(out.prefixItems, d + 1);
   if (Array.isArray(out.oneOf)) {
     out.anyOf = (out.anyOf || []).concat(out.oneOf);
     delete out.oneOf;
   }
   if (Array.isArray(out.allOf)) {
-    // allOf 只有一个元素时直接展开合并到当前层级
-    if (out.allOf.length === 1 && typeof out.allOf[0] === "object" && !Array.isArray(out.allOf[0])) {
-      const merged = out.allOf[0];
+    if (out.allOf.length === 1 && out.allOf[0] && typeof out.allOf[0] === "object" && !Array.isArray(out.allOf[0])) {
+      const merged = sanitizeJsonSchemaForTransport(out.allOf[0], d + 1);
       delete out.allOf;
-      for (const mk of Object.keys(merged)) {
-        if (!(mk in out)) out[mk] = merged[mk];
+      for (const [mk, mv] of Object.entries(merged)) {
+        if (!(mk in out)) out[mk] = mv;
       }
     } else {
-      // 多元素 allOf 无法安全合并，退化为 anyOf（丢失 "全部匹配" 语义，但不会 400）
       out.anyOf = (out.anyOf || []).concat(out.allOf);
       delete out.allOf;
     }
   }
-  if (Array.isArray(out.anyOf)) out.anyOf = out.anyOf.map((x) => coerceOpenAiStrictJsonSchema(x, d + 1));
-  if (out.not != null) out.not = coerceOpenAiStrictJsonSchema(out.not, d + 1);
+  if (Array.isArray(out.anyOf)) out.anyOf = out.anyOf.map((x) => sanitizeJsonSchemaForTransport(x, d + 1));
+  if (out.not != null) out.not = sanitizeJsonSchemaForTransport(out.not, d + 1);
 
   if (out.$defs && typeof out.$defs === "object" && !Array.isArray(out.$defs)) {
     const defs = out.$defs;
     const next = {};
-    for (const k of Object.keys(defs)) next[k] = coerceOpenAiStrictJsonSchema(defs[k], d + 1);
+    for (const k of Object.keys(defs)) next[k] = sanitizeJsonSchemaForTransport(defs[k], d + 1);
     out.$defs = next;
   }
   if (out.definitions && typeof out.definitions === "object" && !Array.isArray(out.definitions)) {
     const defs = out.definitions;
     const next = {};
-    for (const k of Object.keys(defs)) next[k] = coerceOpenAiStrictJsonSchema(defs[k], d + 1);
+    for (const k of Object.keys(defs)) next[k] = sanitizeJsonSchemaForTransport(defs[k], d + 1);
     out.definitions = next;
   }
 
   return out;
 }
 
+function resolveToolSchemaForTransport(def) {
+  return sanitizeJsonSchemaForTransport(resolveToolSchema(def), 0);
+}
+
 function convertOpenAiTools(toolDefs) {
   const defs = normalizeToolDefinitions(toolDefs);
-  return defs.map((d) => ({ type: "function", function: { name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), parameters: resolveToolSchema(d) } }));
+  return defs.map((d) => ({ type: "function", function: { name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), parameters: resolveToolSchemaForTransport(d) } }));
 }
 
 function convertAnthropicTools(toolDefs) {
   const defs = normalizeToolDefinitions(toolDefs);
-  return defs.map((d) => ({ name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), input_schema: resolveToolSchema(d) }));
+  return defs.map((d) => ({ name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), input_schema: resolveToolSchemaForTransport(d) }));
 }
 
 function convertGeminiTools(toolDefs) {
   const defs = normalizeToolDefinitions(toolDefs);
-  const decls = defs.map((d) => ({ name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), parameters: resolveToolSchema(d) }));
+  const decls = defs.map((d) => ({ name: d.name, ...(normalizeString(d.description) ? { description: d.description } : {}), parameters: resolveToolSchemaForTransport(d) }));
   if (!decls.length) return [];
   return [{ functionDeclarations: decls }];
 }
@@ -145,8 +131,8 @@ function convertOpenAiResponsesTools(toolDefs) {
   return defs.map((d) => ({
     type: "function",
     name: d.name,
-    parameters: coerceOpenAiStrictJsonSchema(resolveToolSchema(d)),
-    strict: true,
+    parameters: resolveToolSchemaForTransport(d),
+    strict: false,
     ...(normalizeString(d.description) ? { description: d.description } : {})
   }));
 }
@@ -168,7 +154,8 @@ function buildToolMetaByName(toolDefs) {
 module.exports = {
   normalizeToolDefinitions,
   resolveToolSchema,
-  coerceOpenAiStrictJsonSchema,
+  sanitizeJsonSchemaForTransport,
+  resolveToolSchemaForTransport,
   convertOpenAiTools,
   convertAnthropicTools,
   convertGeminiTools,
