@@ -28,8 +28,15 @@ function makeLogger(prefix) {
   return (msg) => console.log(`[${p}] ${msg}`);
 }
 
+function makeWarnLogger(prefix) {
+  const p = String(prefix || "").trim();
+  if (!p) return () => void 0;
+  return (msg) => console.warn(`[${p}] WARN: ${msg}`);
+}
+
 function applyByokPatches({ repoRoot, extensionDir, pkgPath, extJsPath, interceptorInjectPath, logPrefix }) {
   const log = makeLogger(logPrefix || "byok");
+  const warn = makeWarnLogger(logPrefix || "byok");
   const root = path.resolve(String(repoRoot || ""));
   const extDir = path.resolve(String(extensionDir || ""));
   const pkg = path.resolve(String(pkgPath || ""));
@@ -50,7 +57,10 @@ function applyByokPatches({ repoRoot, extensionDir, pkgPath, extJsPath, intercep
   copyDir(payloadDir, extDir);
 
   log(`patch webview assets (tool cards fallback)`);
-  patchWebviewToolUseFallback(extDir);
+  const toolUseFallbackResult = patchWebviewToolUseFallback(extDir);
+  if (toolUseFallbackResult && toolUseFallbackResult.skipped) {
+    warn(`skip tool cards fallback: ${toolUseFallbackResult.warning}`);
+  }
 
   log(`patch webview assets (history summary node slimming)`);
   patchWebviewHistorySummaryNode(extDir);
@@ -83,7 +93,10 @@ function applyByokPatches({ repoRoot, extensionDir, pkgPath, extJsPath, intercep
   patchMemoriesUpperBoundSize(extJs);
 
   log(`patch tasklist tools (auto root task init)`);
-  patchTasklistAutoRoot(extJs);
+  const tasklistAutoRootResult = patchTasklistAutoRoot(extJs);
+  if (tasklistAutoRootResult && tasklistAutoRootResult.skipped) {
+    warn(`skip tasklist auto root: ${tasklistAutoRootResult.warning}`);
+  }
 
   log(`patch tasklist tools (add_tasks sanitize empty optional IDs)`);
   patchTasklistAddTasksSanitizeEmptyIds(extJs);

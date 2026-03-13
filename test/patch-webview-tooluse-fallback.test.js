@@ -62,3 +62,37 @@ test("patchWebviewToolUseFallback: patches tool list", () => {
     assert.ok(out.includes("__augment_byok_webview_tooluse_fallback_v1_tool_state"), "tool state marker missing");
   });
 });
+
+test("patchWebviewToolUseFallback: skips when candidate asset missing", () => {
+  withTempDir("augment-byok-webview-tooluse-", (dir) => {
+    const extDir = path.join(dir, "extension");
+    const assetsDir = path.join(extDir, "common-webviews", "assets");
+    const filePath = path.join(assetsDir, "main-panel-test.js");
+    writeUtf8(filePath, "const noop=1;\n");
+
+    const result = patchWebviewToolUseFallback(extDir);
+
+    assert.equal(result.changed, false);
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, "asset_not_found");
+    assert.match(result.warning, /AugmentMessage asset not found/);
+    assert.equal(readUtf8(filePath), "const noop=1;\n");
+  });
+});
+
+test("patchWebviewToolUseFallback: skips when upstream shape no longer matches", () => {
+  withTempDir("augment-byok-webview-tooluse-", (dir) => {
+    const extDir = path.join(dir, "extension");
+    const assetsDir = path.join(extDir, "common-webviews", "assets");
+    const filePath = path.join(assetsDir, "AugmentMessage-test.js");
+    writeUtf8(filePath, "const noop=1;\n");
+
+    const result = patchWebviewToolUseFallback(extDir);
+
+    assert.equal(result.changed, false);
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, "upstream_changed");
+    assert.match(result.warning, /upstream may have changed/);
+    assert.equal(readUtf8(filePath), "const noop=1;\n");
+  });
+});

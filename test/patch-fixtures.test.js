@@ -270,17 +270,17 @@ test("patchOfficialOverrides: applies expected replacements and is idempotent", 
       `class ApiClient{`,
       `  async makeAuthenticatedCall(t,r,n,i="POST",o,s){`,
       `    const c="https://example.com/";`,
-      `    const u=new URL(t,c)`,
+      `    const d=new URL(t,c)`,
       `    const f={status:500,statusText:"ERR"}`,
-      "    throw new at(`API call failed: ${f.statusText}`,Ye.Internal)",
+      "    throw new at(`API call failed: ${f.statusText}`,He.Internal)",
       `  }`,
       `  async makeAuthenticatedCallStream(t,r,n,i="post",o){`,
       `    const c={tenantUrl:"https://example.com/"};`,
-      `    const u=new URL(t,c.tenantUrl)`,
+      `    const d=new URL(t,c.tenantUrl)`,
       `    const f={status:500,statusText:"ERR"}`,
-      "    throw new at(`API call failed: ${f.statusText}`,Ye.Internal)",
+      "    throw new at(`API call failed: ${f.statusText}`,He.Internal)",
       `    const h={status:500,statusText:"ERR"}`,
-      "    throw new at(`API call failed: ${h.statusText}`,Ye.Internal)",
+      "    throw new at(`API call failed: ${h.statusText}`,He.Internal)",
       `  }`,
       `  async callApi(p0,p1,p2,p3,p4,baseUrl,p6,p7,p8,p9,apiToken){`,
       `    return {baseUrl,apiToken};`,
@@ -311,6 +311,7 @@ test("patchOfficialOverrides: applies expected replacements and is idempotent", 
 
     assert.ok(out1.includes("API call failed: ${f.status} ${f.statusText}"));
     assert.ok(out1.includes("API call failed: ${h.status} ${h.statusText}"));
+    assert.ok(out1.includes("d.toString()"));
 
     assert.ok(!out1.includes("u=u??await this.clientAuth.getCompletionURL()"));
     assert.ok(out1.includes("u=u||await this.clientAuth.getCompletionURL()"));

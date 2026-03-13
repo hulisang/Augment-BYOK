@@ -10,6 +10,16 @@ const MARKER_TOOL_LIST = "__augment_byok_webview_tooluse_fallback_v1";
 const MARKER_TOOL_LIST_UNGROUPED = "__augment_byok_webview_tooluse_fallback_v1_ungrouped";
 const MARKER_TOOL_STATE = "__augment_byok_webview_tooluse_fallback_v1_tool_state";
 
+function makeSkipResult(reason, warning) {
+  return {
+    changed: false,
+    skipped: true,
+    reason,
+    warning: String(warning || ""),
+    results: []
+  };
+}
+
 function escapeRegExp(str) {
   return String(str || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -122,11 +132,17 @@ function patchWebviewToolUseFallback(extensionDir) {
     .filter((name) => typeof name === "string" && name.startsWith("AugmentMessage-") && name.endsWith(".js"))
     .map((name) => path.join(assetsDir, name));
 
-  if (!candidates.length) throw new Error("AugmentMessage asset not found (upstream may have changed)");
+  if (!candidates.length) {
+    return makeSkipResult("asset_not_found", "AugmentMessage asset not found (upstream may have changed)");
+  }
 
   const results = [];
-  for (const filePath of candidates) results.push({ filePath, ...patchAugmentMessageAsset(filePath) });
-  return { changed: results.some((r) => r.changed), results };
+  try {
+    for (const filePath of candidates) results.push({ filePath, ...patchAugmentMessageAsset(filePath) });
+  } catch (error) {
+    return makeSkipResult("upstream_changed", error instanceof Error ? error.message : String(error));
+  }
+  return { changed: results.some((r) => r.changed), skipped: false, results };
 }
 
 module.exports = { patchWebviewToolUseFallback };
@@ -137,5 +153,6 @@ if (require.main === module) {
     console.error(`usage: ${path.basename(process.argv[1])} <extensionDir>`);
     process.exit(2);
   }
-  patchWebviewToolUseFallback(extensionDir);
+  const result = patchWebviewToolUseFallback(extensionDir);
+  if (result && result.skipped) console.warn(`[warn] ${result.warning}`);
 }

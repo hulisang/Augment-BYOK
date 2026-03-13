@@ -136,7 +136,10 @@ function main(argv = process.argv) {
   assertContains(extJs, "__augment_byok_callapi_shim_patched_v1", "callApi shim patched");
   assertContains(extJs, "__augment_byok_model_picker_byok_only_v1", "model picker (BYOK-only) patched");
   assertContains(extJs, "__augment_byok_memories_upper_bound_size_patched_v1", "memories upper_bound_size patched");
-  assertContains(extJs, "__augment_byok_tasklist_auto_root_patched_v1", "tasklist auto root patched");
+  assert(
+    extJs.includes("__augment_byok_tasklist_auto_root_patched_v1") || extJs.includes("getOrCreateTaskListId("),
+    'missing tasklist auto root support (expected patch marker or upstream "getOrCreateTaskListId(" support)'
+  );
   assertContains(extJs, "__augment_byok_tasklist_add_tasks_sanitize_empty_ids_patched_v1", "tasklist add_tasks sanitize empty ids patched");
   assertContains(extJs, "__augment_byok_tasklist_add_tasks_errors_patched_v1", "tasklist add_tasks errors patched");
   assert(!extJs.includes("case \"/autoAuth\"") && !extJs.includes("handleAutoAuth"), "autoAuth guard failed (post-check)");

@@ -8,10 +8,23 @@ const { ensureMarker, replaceOnceRegex } = require("../lib/patch");
 
 const MARKER = "__augment_byok_tasklist_auto_root_patched_v1";
 
+function makeSkipResult(reason, warning) {
+  return {
+    changed: false,
+    skipped: true,
+    reason,
+    warning: String(warning || "")
+  };
+}
+
 function patchTasklistAutoRoot(filePath) {
   if (!fs.existsSync(filePath)) throw new Error(`missing file: ${filePath}`);
   const original = fs.readFileSync(filePath, "utf8");
   if (original.includes(MARKER)) return { changed: false, reason: "already_patched" };
+
+  if (original.includes("getOrCreateTaskListId(")) {
+    return makeSkipResult("upstream_has_auto_root", "tasklist tools already use getOrCreateTaskListId (upstream auto root present)");
+  }
 
   let next = original;
 
@@ -98,7 +111,7 @@ function patchTasklistAutoRoot(filePath) {
 
   next = ensureMarker(next, MARKER);
   fs.writeFileSync(filePath, next, "utf8");
-  return { changed: true, reason: "patched" };
+  return { changed: true, skipped: false, reason: "patched" };
 }
 
 module.exports = { patchTasklistAutoRoot };
@@ -109,5 +122,6 @@ if (require.main === module) {
     console.error(`usage: ${path.basename(process.argv[1])} <extension/out/extension.js>`);
     process.exit(2);
   }
-  patchTasklistAutoRoot(filePath);
+  const result = patchTasklistAutoRoot(filePath);
+  if (result && result.skipped) console.warn(`[warn] ${result.warning}`);
 }
