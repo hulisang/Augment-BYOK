@@ -133,6 +133,8 @@
 - [x] 目标：把官方 `completionURL/apiToken` 来源从 VS Code settings 改为 `globalState`
 - [x] 注入脚本：`tools/patch/patch-official-overrides.js`
 - [x] 行为：支持私有租户 / 官方上下文注入（token 可选；缺 token 时注入会 skip，不影响 BYOK 主链路）
+- [x] `/get-models` 主链路：优先使用本地 BYOK official `completionURL/apiToken` 请求官方 `get-models`，保留真实 `feature_flags`，再叠加 BYOK-only 模型过滤与 `model_registry` 重写
+- [x] Beta 兜底：若官方 `feature_flags` 完全未返回相关 Beta 键，则本地仅注入最小 Beta 页开关与用户可选的 `publicBeta*` 默认值；不再把 `enable*`/正式 rollout 键强行置为 true，具体功能由使用者在 Beta 页自行开启
 
 #### 2.6 模型选择器补丁（Model Picker：BYOK-only）
 
@@ -273,6 +275,7 @@
 
 - [x] `callApi`（5）：`/get-models`、`/chat`、`/completion`、`/chat-input-completion`、`/next_edit_loc`
 - [x] `callApiStream`（6）：`/chat-stream`、`/prompt-enhancer`、`/instruction-stream`、`/smart-paste-stream`、`/next-edit-stream`、`/generate-commit-message-stream`
+- [x] `feature_flags` 初始化：`/get-models` 走官方返回值作为单一真相，避免前端默认值强开造成实验特性误启用
 - [x] 单一真相维护：`tools/report/llm-endpoints-spec.js`
 - [x] 自动生成同步：`npm run gen:llm-endpoints`（更新 `docs/ENDPOINTS.md` + UI + 默认 routing rules）
 

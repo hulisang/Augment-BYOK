@@ -5,6 +5,9 @@ const { DEFAULT_SELF_TEST_TIMEOUT_MS } = require("../../infra/constants");
 const { normalizeString, normalizeRawToken } = require("../../infra/util");
 const { setRuntimeEnabled: setRuntimeEnabledPersisted } = require("../../config/state");
 const { clearHistorySummaryCacheAll } = require("../../core/augment-history-summary/auto");
+const { ensureModelRegistryFeatureFlags } = require("../../core/model-registry");
+const { buildByokModelsFromConfig } = require("../../core/protocol");
+const { applyOfficialBetaFlagsFallback, getRelevantOfficialBetaFlags } = require("../../runtime/official/beta-flags");
 const { runSelfTest } = require("../../core/self-test/run");
 const { fetchOfficialGetModels } = require("../../runtime/official/get-models");
 const { fetchProviderModels } = require("../../providers/models");
@@ -24,6 +27,71 @@ function postStatus(panel, status) {
 
 function postRender(panel, cfgMgr, state) {
   post(panel, { type: "render", config: cfgMgr.get(), runtimeEnabled: Boolean(state?.runtimeEnabled) });
+}
+
+function getOfficialFeatureFlags(json) {
+  return json && typeof json === "object" && json.feature_flags && typeof json.feature_flags === "object" && !Array.isArray(json.feature_flags)
+    ? json.feature_flags
+    : {};
+}
+
+function buildOfficialFeatureFlagsForUpstreamSync(cfg, json) {
+  const byokModels = buildByokModelsFromConfig(cfg);
+  const defaultModel = normalizeString((json && (json.default_model || json.defaultModel)) || byokModels[0]) || "unknown";
+  const baseFlags = { ...getOfficialFeatureFlags(json) };
+
+  delete baseFlags.additional_chat_models;
+  delete baseFlags.additionalChatModels;
+  delete baseFlags.model_registry;
+  delete baseFlags.modelRegistry;
+  delete baseFlags.model_info_registry;
+  delete baseFlags.modelInfoRegistry;
+
+  return ensureModelRegistryFeatureFlags(applyOfficialBetaFlagsFallback(baseFlags), {
+    byokModelIds: byokModels,
+    defaultModel,
+    agentChatModel: defaultModel
+  });
+}
+
+function formatRelevantOfficialBetaFlags(flags) {
+  const entries = Object.entries(getRelevantOfficialBetaFlags(flags));
+  return entries.length ? entries.map(([key, value]) => `${key}=${value}`).join(", ") : "(无相关 Beta flags)";
+}
+
+function formatSaveOfficialFeatureFlagsStatus(result) {
+  if (result && typeof result.error === "string" && result.error) {
+    return `Saved (OK). Official feature flag sync failed: ${result.error}`;
+  }
+  if (result && result.ok === true) {
+    return "Saved (OK). Official feature flags synced.";
+  }
+  if (result && result.reason === "missing_feature_flag_manager") {
+    return "Saved (OK). Official feature flags fetched but runtime sync skipped.";
+  }
+  return "Saved (OK).";
+}
+
+function syncOfficialFeatureFlagsToUpstream({ cfg, json }) {
+  const manager = globalThis.__augment_byok_upstream && globalThis.__augment_byok_upstream.augmentExtension
+    ? globalThis.__augment_byok_upstream.augmentExtension.featureFlagManager
+    : null;
+  if (!manager || typeof manager.update !== "function") {
+    return { ok: false, reason: "missing_feature_flag_manager", flags: buildOfficialFeatureFlagsForUpstreamSync(cfg, json) };
+  }
+
+  const flags = buildOfficialFeatureFlagsForUpstreamSync(cfg, json);
+  manager.update(flags);
+  return { ok: true, reason: "updated", flags };
+}
+
+async function refreshOfficialFeatureFlagsFromConfig(cfg, { timeoutMs = 12000 } = {}) {
+  const off = cfg && typeof cfg === "object" && cfg.official && typeof cfg.official === "object" ? cfg.official : {};
+  const completionURL = normalizeString(off.completionUrl) || "https://ace.cctv.mba/";
+  const apiToken = normalizeRawToken(off.apiToken);
+  if (!apiToken) return { ok: false, reason: "missing_token" };
+  const json = await fetchOfficialGetModels({ completionURL, apiToken, timeoutMs });
+  return { ...syncOfficialFeatureFlagsToUpstream({ cfg, json }), json };
 }
 
 function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
@@ -87,14 +155,23 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
     },
     save: async (msg) => {
       const raw = msg && typeof msg === "object" ? msg.config : null;
+      let status = "Saved (OK).";
       try {
         await cfgMgr.saveNow(raw, "panel_save");
-        postStatus(panel, "Saved (OK).");
+        try {
+          const refreshed = await refreshOfficialFeatureFlagsFromConfig(cfgMgr.get(), { timeoutMs: 12000 });
+          status = formatSaveOfficialFeatureFlagsStatus(refreshed);
+        } catch (syncErr) {
+          const syncMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
+          warn("panel save official flags sync failed:", syncMsg);
+          status = formatSaveOfficialFeatureFlagsStatus({ error: syncMsg });
+        }
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
         warn("panel save failed:", m);
-        postStatus(panel, `Save failed: ${m}`);
+        status = `Save failed: ${m}`;
       }
+      postStatus(panel, status);
       postRender(panel, cfgMgr, state);
     },
     exportConfig: async (msg) => {
@@ -166,6 +243,7 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
       try {
         const startedAtMs = Date.now();
         const json = await fetchOfficialGetModels({ completionURL: completionUrl, apiToken, timeoutMs: 12000 });
+        const syncResult = syncOfficialFeatureFlagsToUpstream({ cfg, json });
 
         const defaultModel = normalizeString(json.default_model ?? json.defaultModel);
         const modelsCount = Array.isArray(json.models) ? json.models.length : 0;
@@ -181,8 +259,14 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
           modelsCount,
           defaultModel,
           featureFlagsCount,
-          elapsedMs
+          elapsedMs,
+          syncedToRuntime: syncResult.ok,
+          betaFlags: getRelevantOfficialBetaFlags(syncResult.flags || json.feature_flags)
         });
+        postStatus(
+          panel,
+          `Official /get-models OK. ${syncResult.ok ? "Runtime synced." : "Runtime sync skipped."} ${formatRelevantOfficialBetaFlags(syncResult.flags || json.feature_flags)}`
+        );
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
         warn("testOfficialGetModels failed:", requestId ? { requestId, error: m } : m);
@@ -290,4 +374,10 @@ async function openConfigPanel({ vscode, ctx, cfgMgr, state }) {
   return panel;
 }
 
-module.exports = { openConfigPanel };
+module.exports = {
+  openConfigPanel,
+  buildOfficialFeatureFlagsForUpstreamSync,
+  formatSaveOfficialFeatureFlagsStatus,
+  getRelevantOfficialBetaFlags,
+  syncOfficialFeatureFlagsToUpstream
+};

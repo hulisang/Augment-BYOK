@@ -4,6 +4,7 @@ const { warn } = require("../../../infra/log");
 const { withTiming } = require("../../../infra/trace");
 const { normalizeString, normalizeRawToken, safeTransform } = require("../../../infra/util");
 const { getOfficialConnection } = require("../../../config/official");
+const { applyOfficialBetaFlagsFallback } = require("../../official/beta-flags");
 const { fetchOfficialGetModels } = require("../../official/get-models");
 const { ensureModelRegistryFeatureFlags } = require("../../../core/model-registry");
 const {
@@ -47,7 +48,11 @@ async function handleGetModels({ cfg, ep, transform, abortSignal, timeoutMs, ups
       delete scrubbedFlags.model_info_registry;
       delete scrubbedFlags.modelInfoRegistry;
 
-      const flags = ensureModelRegistryFeatureFlags(scrubbedFlags, { byokModelIds: byokModels, defaultModel, agentChatModel: defaultModel });
+      const flags = ensureModelRegistryFeatureFlags(applyOfficialBetaFlagsFallback(scrubbedFlags), {
+        byokModelIds: byokModels,
+        defaultModel,
+        agentChatModel: defaultModel
+      });
       const models = byokModels.map(makeModelInfo);
 
       return safeTransform(transform, { ...base, default_model: defaultModel, models, feature_flags: flags }, ep);
